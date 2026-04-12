@@ -1,0 +1,21 @@
+{
+  "settings_version": "0.0.6",
+  "datasets_dir": "D:\\projects\\Repositories\\datasets",
+  "weights_dir": "D:\\projects\\Repositories\\rods-backend\\weights",
+  "runs_dir": "D:\\projects\\Repositories\\rods-backend\\runs",
+  "uuid": "66be031e775a421669a61c7e05daa9635e4e1143edf396ebd4efa33f5710e364",
+  "sync": true,
+  "api_key": "",
+  "openai_api_key": "",
+  "clearml": true,
+  "comet": true,
+  "dvc": true,
+  "hub": true,
+  "mlflow": true,
+  "neptune": true,
+  "raytune": true,
+  "tensorboard": false,
+  "wandb": false,
+  "vscode_msg": true,
+  "openvino_msg": true
+}

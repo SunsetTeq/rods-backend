@@ -1,0 +1,149 @@
+:root {
+    color-scheme: light;
+    --bg: #f4f7fb;
+    --panel: #ffffff;
+    --accent: #1254ff;
+    --accent-dark: #0b389f;
+    --text: #172033;
+    --muted: #5f6b85;
+    --border: #d8e0ef;
+    --error-bg: #fff1f1;
+    --error-border: #f0c9c9;
+    --error-text: #8d1d1d;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family: "Segoe UI", sans-serif;
+    background:
+        radial-gradient(circle at top left, rgba(18, 84, 255, 0.12), transparent 30%),
+        linear-gradient(180deg, #f8fbff 0%, var(--bg) 100%);
+    color: var(--text);
+}
+
+.page {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 32px 20px 48px;
+}
+
+.hero {
+    margin-bottom: 24px;
+}
+
+.hero h1 {
+    margin: 0 0 8px;
+    font-size: 32px;
+}
+
+.hero p {
+    margin: 0;
+    color: var(--muted);
+}
+
+.grid {
+    display: grid;
+    gap: 20px;
+    grid-template-columns: minmax(320px, 2fr) minmax(280px, 1fr);
+}
+
+.card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 18px;
+    box-shadow: 0 18px 40px rgba(27, 42, 89, 0.08);
+}
+
+.stream {
+    width: 100%;
+    border-radius: 16px;
+    border: 1px solid var(--border);
+    background: #dfe7f5;
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
+}
+
+.meta {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 16px;
+}
+
+.stat {
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 12px;
+    background: #fbfdff;
+}
+
+.stat b {
+    display: block;
+    margin-bottom: 6px;
+}
+
+form {
+    display: grid;
+    gap: 12px;
+}
+
+label {
+    display: grid;
+    gap: 6px;
+    font-size: 14px;
+}
+
+input,
+select,
+button {
+    width: 100%;
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    font: inherit;
+}
+
+button {
+    background: var(--accent);
+    color: #fff;
+    border: 0;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+button:hover {
+    background: var(--accent-dark);
+}
+
+.muted {
+    color: var(--muted);
+    font-size: 14px;
+}
+
+.error {
+    margin-top: 12px;
+    padding: 12px;
+    border-radius: 12px;
+    background: var(--error-bg);
+    color: var(--error-text);
+    border: 1px solid var(--error-border);
+}
+
+.hidden {
+    display: none !important;
+}
+
+@media (max-width: 900px) {
+    .grid {
+        grid-template-columns: 1fr;
+    }
+
+    .meta {
+        grid-template-columns: 1fr;
+    }
+}

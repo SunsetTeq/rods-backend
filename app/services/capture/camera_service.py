@@ -31,9 +31,11 @@ class CameraService:
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
+        self._state_lock = threading.RLock()
 
         self._latest_frame: Optional[np.ndarray] = None
         self._latest_jpeg: Optional[bytes] = None
+        self._last_error: Optional[str] = None
 
         self._frames_read = 0
         self._read_failures = 0
@@ -49,7 +51,18 @@ class CameraService:
             return self.source
         raise ValueError(f"Unsupported source_type: {self.source_type}")
 
+    def _reset_runtime_stats(self) -> None:
+        self._frames_read = 0
+        self._read_failures = 0
+        self._actual_fps = 0.0
+        self._last_fps_calc_time = time.time()
+        self._fps_counter = 0
+
     def start(self) -> None:
+        with self._state_lock:
+            self._start_locked()
+
+    def _start_locked(self) -> None:
         if self._is_running:
             logger.info("Camera service already running")
             return
@@ -61,10 +74,19 @@ class CameraService:
             self.source,
         )
 
+        self._reset_runtime_stats()
+        self._last_error = None
         self._capture = cv2.VideoCapture(resolved_source)
 
         if not self._capture.isOpened():
-            raise RuntimeError(f"Failed to open camera source: {self.source}")
+            self._last_error = f"Failed to open camera source: {self.source}"
+            self._capture.release()
+            self._capture = None
+            self._is_running = False
+            with self._lock:
+                self._latest_frame = None
+                self._latest_jpeg = None
+            raise RuntimeError(self._last_error)
 
         if self.source_type == "usb":
             self._capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
@@ -79,19 +101,63 @@ class CameraService:
         logger.info("Camera service started")
 
     def stop(self) -> None:
+        with self._state_lock:
+            self._stop_locked(clear_error=False)
+
+    def _stop_locked(self, clear_error: bool) -> None:
         logger.info("Stopping camera service")
 
         self._stop_event.set()
 
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=3)
+        self._thread = None
 
         if self._capture is not None:
             self._capture.release()
             self._capture = None
 
         self._is_running = False
+        if clear_error:
+            self._last_error = None
         logger.info("Camera service stopped")
+
+    def switch_source(self, source_type: str, source: str) -> dict:
+        with self._state_lock:
+            previous_source_type = self.source_type
+            previous_source = self.source
+            previous_was_running = self._is_running
+
+            if self._is_running:
+                self._stop_locked(clear_error=False)
+
+            self.source_type = source_type
+            self.source = source
+
+            try:
+                self._start_locked()
+            except Exception as exc:
+                logger.exception("Failed to switch camera source")
+                self.source_type = previous_source_type
+                self.source = previous_source
+
+                if previous_was_running:
+                    try:
+                        self._start_locked()
+                    except Exception:
+                        logger.exception("Failed to restore previous camera source")
+
+                return {
+                    "ok": False,
+                    "error": str(exc),
+                    "status": self.get_status(),
+                }
+
+            return {
+                "ok": True,
+                "error": None,
+                "status": self.get_status(),
+            }
 
     def _reader_loop(self) -> None:
         while not self._stop_event.is_set():
@@ -103,11 +169,13 @@ class CameraService:
 
             if not ok or frame is None:
                 self._read_failures += 1
+                self._last_error = "Failed to read frame from current source"
                 time.sleep(0.03)
                 continue
 
             self._frames_read += 1
             self._fps_counter += 1
+            self._last_error = None
 
             now = time.time()
             elapsed = now - self._last_fps_calc_time
@@ -158,4 +226,46 @@ class CameraService:
             "actual_fps": round(self._actual_fps, 2),
             "frames_read": self._frames_read,
             "read_failures": self._read_failures,
+            "last_error": self._last_error,
         }
+
+    def list_usb_cameras(self, max_index: int = 5) -> list[dict]:
+        cameras: list[dict] = []
+        active_usb_index = None
+
+        if self._is_running and self.source_type == "usb":
+            try:
+                active_usb_index = int(self.source)
+            except ValueError:
+                active_usb_index = None
+
+        for index in range(max_index + 1):
+            if active_usb_index == index:
+                status = self.get_status()
+                is_opened = True
+                width = status["frame_width"]
+                height = status["frame_height"]
+            else:
+                capture = cv2.VideoCapture(index)
+                is_opened = capture.isOpened()
+                width = None
+                height = None
+
+                if is_opened:
+                    ok, frame = capture.read()
+                    if ok and frame is not None:
+                        height, width = frame.shape[:2]
+
+                capture.release()
+
+            cameras.append(
+                {
+                    "index": index,
+                    "available": is_opened,
+                    "width": width,
+                    "height": height,
+                    "label": f"USB camera {index}",
+                }
+            )
+
+        return cameras

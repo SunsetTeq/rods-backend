@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RODS Stream Debug</title>
+    <link rel="stylesheet" href="/static/debug/stream.css" />
+</head>
+<body>
+    <div class="page">
+        <div class="hero">
+            <h1>RODS Camera Debug</h1>
+            <p>Debug page for checking the first block: live stream, source switching, and stream status.</p>
+        </div>
+
+        <div class="grid">
+            <section class="card">
+                <img
+                    id="stream_image"
+                    class="stream"
+                    src="/api/v1/vision/mjpeg"
+                    alt="Annotated live stream"
+                />
+
+                <div class="meta">
+                    <div class="stat">
+                        <b>Running</b>
+                        <span id="is_running">-</span>
+                    </div>
+                    <div class="stat">
+                        <b>Source</b>
+                        <span id="source_text">-</span>
+                    </div>
+                    <div class="stat">
+                        <b>Frame Size</b>
+                        <span id="frame_size">-</span>
+                    </div>
+                    <div class="stat">
+                        <b>FPS</b>
+                        <span id="fps">-</span>
+                    </div>
+                    <div class="stat">
+                        <b>Detections</b>
+                        <span id="detections_count">-</span>
+                    </div>
+                    <div class="stat">
+                        <b>Inference</b>
+                        <span id="inference_ms">-</span>
+                    </div>
+                </div>
+
+                <div id="error_box" class="error hidden">
+                    <b>Last error:</b>
+                    <span id="last_error"></span>
+                </div>
+            </section>
+
+            <aside class="card">
+                <form id="camera_form">
+                    <label>
+                        Source type
+                        <select id="source_type" name="source_type">
+                            <option value="usb">USB camera</option>
+                            <option value="rtsp">RTSP stream</option>
+                            <option value="file">Video file</option>
+                        </select>
+                    </label>
+
+                    <label id="usb_group">
+                        USB camera index
+                        <select id="usb_source"></select>
+                    </label>
+
+                    <label id="text_group" class="hidden">
+                        Source path / URL
+                        <input
+                            id="text_source"
+                            type="text"
+                            placeholder="rtsp://... or D:/video/test.mp4"
+                        />
+                    </label>
+
+                    <button type="submit">Switch camera</button>
+                </form>
+
+                <p class="muted">
+                    API endpoints:
+                    <code>/status</code>,
+                    <code>/frame.jpg</code>,
+                    <code>/mjpeg</code>,
+                    <code>/select</code>,
+                    <code>/sources/usb</code>,
+                    <code>/api/v1/vision/status</code>,
+                    <code>/api/v1/vision/detections/latest</code>,
+                    <code>/api/v1/vision/mjpeg</code>
+                </p>
+
+                <div id="vision_error_box" class="error hidden">
+                    <b>Vision error:</b>
+                    <span id="vision_last_error"></span>
+                </div>
+            </aside>
+        </div>
+    </div>
+
+    <script src="/static/debug/stream.js"></script>
+</body>
+</html>

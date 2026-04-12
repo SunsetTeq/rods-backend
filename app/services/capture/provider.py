@@ -4,7 +4,7 @@ from app.services.capture.camera_service import CameraService
 
 camera_service = CameraService(
     source_type=settings.camera_source_type,
-    source=settings.camera_source,
+    source=str(settings.camera_source),
     width=settings.camera_width,
     height=settings.camera_height,
     fps=settings.camera_fps,
