@@ -14,6 +14,7 @@ class DetectionItemResponse(BaseModel):
 class DetectionFrameResponse(BaseModel):
     frame_id: int
     source_frame_size: tuple[int, int] | None
+    frame_timestamp: str | None = None
     inference_ms: float
     detections_count: int
     detections: list[DetectionItemResponse]

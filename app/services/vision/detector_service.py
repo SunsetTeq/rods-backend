@@ -2,6 +2,7 @@ import logging
 import os
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -209,6 +210,7 @@ class DetectorService:
         return {
             "frame_id": self._latest_frame_id,
             "source_frame_size": (width, height),
+            "frame_timestamp": datetime.now(timezone.utc).isoformat(),
             "inference_ms": 0.0,
             "detections_count": len(detections),
             "detections": detections,
@@ -274,6 +276,7 @@ class DetectorService:
             return {
                 "frame_id": self._latest_detection_payload["frame_id"],
                 "source_frame_size": self._latest_detection_payload["source_frame_size"],
+                "frame_timestamp": self._latest_detection_payload.get("frame_timestamp"),
                 "inference_ms": self._latest_detection_payload["inference_ms"],
                 "detections_count": self._latest_detection_payload["detections_count"],
                 "detections": [item.copy() for item in self._latest_detection_payload["detections"]],

@@ -10,6 +10,8 @@ env/
 ENV/
 pythonProject/.venv/
 data/screenshots/
+data/ultralytics/
+scripts/camera_test_preview.jpg
 .vscode/
 .idea/
 Thumbs.db

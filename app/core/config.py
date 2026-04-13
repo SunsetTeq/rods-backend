@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     vision_inference_fps: int = 5
     vision_log_interval_seconds: int = 5
 
+    database_path: str = "data/rods.db"
+    event_stable_frames: int = 8
+    event_absent_frames: int = 12
+    event_cooldown_seconds: int = 30
+    event_recent_limit: int = 100
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
