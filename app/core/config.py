@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     vision_log_interval_seconds: int = 5
 
     database_path: str = "data/rods.db"
+    screenshots_dir: str = "data/screenshots"
     event_stable_frames: int = 8
     event_absent_frames: int = 12
     event_cooldown_seconds: int = 30

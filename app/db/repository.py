@@ -44,11 +44,33 @@ class EventRepository:
                     source_frame_width INTEGER,
                     source_frame_height INTEGER,
                     frame_timestamp TEXT NOT NULL,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    screenshot_original_path TEXT,
+                    screenshot_annotated_path TEXT
                 )
                 """
             )
+            self._ensure_column(connection, "events", "screenshot_original_path", "TEXT")
+            self._ensure_column(connection, "events", "screenshot_annotated_path", "TEXT")
             connection.commit()
+
+    def _ensure_column(
+        self,
+        connection: sqlite3.Connection,
+        table_name: str,
+        column_name: str,
+        column_type: str,
+    ) -> None:
+        existing_columns = {
+            row["name"]
+            for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+        }
+        if column_name in existing_columns:
+            return
+
+        connection.execute(
+            f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"
+        )
 
     def _recover_broken_database(self) -> None:
         journal_path = self.database_path.with_name(f"{self.database_path.name}-journal")
@@ -87,8 +109,10 @@ class EventRepository:
                     source_frame_width,
                     source_frame_height,
                     frame_timestamp,
-                    created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at,
+                    screenshot_original_path,
+                    screenshot_annotated_path
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload["event_type"],
@@ -106,10 +130,63 @@ class EventRepository:
                     payload["source_frame_height"],
                     payload["frame_timestamp"],
                     payload["created_at"],
+                    payload.get("screenshot_original_path"),
+                    payload.get("screenshot_annotated_path"),
                 ),
             )
             connection.commit()
             return int(cursor.lastrowid)
+
+    def update_event_screenshots(
+        self,
+        event_id: int,
+        screenshot_original_path: str | None,
+        screenshot_annotated_path: str | None,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE events
+                SET screenshot_original_path = ?, screenshot_annotated_path = ?
+                WHERE id = ?
+                """,
+                (
+                    screenshot_original_path,
+                    screenshot_annotated_path,
+                    event_id,
+                ),
+            )
+            connection.commit()
+
+    def get_event_by_id(self, event_id: int) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    id,
+                    event_type,
+                    class_name,
+                    class_id,
+                    confidence,
+                    state_key,
+                    first_seen_frame_id,
+                    confirmed_frame_id,
+                    last_seen_frame_id,
+                    stable_frames_required,
+                    absent_frames_required,
+                    cooldown_seconds,
+                    source_frame_width,
+                    source_frame_height,
+                    frame_timestamp,
+                    created_at,
+                    screenshot_original_path,
+                    screenshot_annotated_path
+                FROM events
+                WHERE id = ?
+                """,
+                (event_id,),
+            ).fetchone()
+        return dict(row) if row else None
 
     def list_recent_events(self, limit: int) -> list[dict[str, Any]]:
         with self._connect() as connection:
@@ -131,7 +208,9 @@ class EventRepository:
                     source_frame_width,
                     source_frame_height,
                     frame_timestamp,
-                    created_at
+                    created_at,
+                    screenshot_original_path,
+                    screenshot_annotated_path
                 FROM events
                 ORDER BY id DESC
                 LIMIT ?

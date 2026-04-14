@@ -18,6 +18,8 @@ class EventResponse(BaseModel):
     source_frame_height: int | None
     frame_timestamp: str
     created_at: str
+    screenshot_original_path: str | None = None
+    screenshot_annotated_path: str | None = None
 
 
 class EventEngineStateItemResponse(BaseModel):

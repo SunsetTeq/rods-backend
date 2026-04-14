@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.db.repository import EventRepository
+from app.services.capture.camera_service import CameraService
+from app.services.storage.screenshot_service import ScreenshotService
 from app.services.vision.detector_service import DetectorService
 
 
@@ -27,15 +29,19 @@ class ClassState:
 class EventEngineService:
     def __init__(
         self,
+        camera_service: CameraService,
         detector_service: DetectorService,
         repository: EventRepository,
+        screenshot_service: ScreenshotService,
         stable_frames: int,
         absent_frames: int,
         cooldown_seconds: int,
         poll_interval_seconds: float = 0.05,
     ) -> None:
+        self.camera_service = camera_service
         self.detector_service = detector_service
         self.repository = repository
+        self.screenshot_service = screenshot_service
         self.stable_frames = stable_frames
         self.absent_frames = absent_frames
         self.cooldown_seconds = cooldown_seconds
@@ -172,6 +178,8 @@ class EventEngineService:
         if state.state == "CANDIDATE":
             state.present_frames += 1
             if state.present_frames >= self.stable_frames:
+                original_frame = self.camera_service.get_latest_frame()
+                annotated_frame = self.detector_service.get_latest_annotated_frame()
                 event_id = self.repository.create_event(
                     {
                         "event_type": "confirmed",
@@ -189,16 +197,31 @@ class EventEngineService:
                         "source_frame_height": source_frame_height,
                         "frame_timestamp": frame_timestamp,
                         "created_at": datetime.now(timezone.utc).isoformat(),
+                        "screenshot_original_path": None,
+                        "screenshot_annotated_path": None,
                     }
+                )
+                screenshot_paths = self.screenshot_service.save_event_frames(
+                    event_id=event_id,
+                    original_frame=original_frame,
+                    annotated_frame=annotated_frame,
+                    frame_timestamp=frame_timestamp,
+                )
+                self.repository.update_event_screenshots(
+                    event_id=event_id,
+                    screenshot_original_path=screenshot_paths["screenshot_original_path"],
+                    screenshot_annotated_path=screenshot_paths["screenshot_annotated_path"],
                 )
                 self._confirmed_events_total += 1
                 state.state = "CONFIRMED"
                 logger.info(
-                    "Confirmed event | id=%s | class=%s | confidence=%.2f | frame_id=%s",
+                    "Confirmed event | id=%s | class=%s | confidence=%.2f | frame_id=%s | original=%s | annotated=%s",
                     event_id,
                     detection["class_name"],
                     float(detection["confidence"]),
                     frame_id,
+                    screenshot_paths["screenshot_original_path"],
+                    screenshot_paths["screenshot_annotated_path"],
                 )
             return
 

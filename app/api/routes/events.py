@@ -1,8 +1,12 @@
-from fastapi import APIRouter, Query
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import FileResponse
 
 from app.core.config import settings
 from app.schemas.event import EventEngineStatusResponse, EventResponse
 from app.services.events.provider import event_engine_service, event_repository
+from app.services.storage.provider import screenshot_service
 
 
 router = APIRouter(prefix="/api/v1/events", tags=["events"])
@@ -19,3 +23,38 @@ def list_recent_events(
 ) -> list[EventResponse]:
     rows = event_repository.list_recent_events(limit=limit)
     return [EventResponse(**row) for row in rows]
+
+
+@router.get("/{event_id}", response_model=EventResponse)
+def get_event(event_id: int) -> EventResponse:
+    row = event_repository.get_event_by_id(event_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Event not found")
+    return EventResponse(**row)
+
+
+@router.get("/{event_id}/screenshots/{variant}")
+def get_event_screenshot(event_id: int, variant: str) -> FileResponse:
+    row = event_repository.get_event_by_id(event_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    if variant == "original":
+        relative_path = row.get("screenshot_original_path")
+    elif variant == "annotated":
+        relative_path = row.get("screenshot_annotated_path")
+    else:
+        raise HTTPException(status_code=404, detail="Unknown screenshot variant")
+
+    if not relative_path:
+        raise HTTPException(status_code=404, detail="Screenshot is not available for this event")
+
+    absolute_path = screenshot_service.get_absolute_path(relative_path)
+    if not absolute_path.exists() or not absolute_path.is_file():
+        raise HTTPException(status_code=404, detail="Screenshot file not found")
+
+    media_type = "image/jpeg"
+    if absolute_path.suffix.lower() == ".png":
+        media_type = "image/png"
+
+    return FileResponse(Path(absolute_path), media_type=media_type)
