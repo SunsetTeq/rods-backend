@@ -5,8 +5,10 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from app.api.routes.cameras import router as cameras_router
 from app.api.routes.health import router as health_router
 from app.api.routes.events import router as events_router
+from app.api.routes.settings import router as settings_router
 from app.api.routes.stream import router as stream_router
 from app.api.routes.vision import router as vision_router
 from app.core.config import settings
@@ -45,6 +47,8 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.include_router(health_router)
+app.include_router(cameras_router)
 app.include_router(events_router)
+app.include_router(settings_router)
 app.include_router(stream_router)
 app.include_router(vision_router)

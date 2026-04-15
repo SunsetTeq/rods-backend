@@ -13,4 +13,7 @@ detector_service = DetectorService(
     inference_fps=settings.vision_inference_fps,
     jpeg_quality=settings.frame_jpeg_quality,
     log_interval_seconds=settings.vision_log_interval_seconds,
+    tracking_enabled=settings.vision_tracking_enabled,
+    tracking_persist=settings.vision_tracking_persist,
+    tracker_config=settings.vision_tracker_config,
 )

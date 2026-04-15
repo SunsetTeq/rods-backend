@@ -6,6 +6,7 @@ class EventResponse(BaseModel):
     event_type: str
     class_name: str
     class_id: int | None
+    track_id: int | None = None
     confidence: float
     state_key: str
     first_seen_frame_id: int
@@ -20,10 +21,14 @@ class EventResponse(BaseModel):
     created_at: str
     screenshot_original_path: str | None = None
     screenshot_annotated_path: str | None = None
+    screenshot_original_url: str | None = None
+    screenshot_annotated_url: str | None = None
 
 
 class EventEngineStateItemResponse(BaseModel):
     state_key: str
+    class_name: str | None = None
+    track_id: int | None = None
     state: str
     present_frames: int
     absent_frames: int

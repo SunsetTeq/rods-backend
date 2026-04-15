@@ -27,6 +27,9 @@ class DetectorService:
         inference_fps: int,
         jpeg_quality: int,
         log_interval_seconds: int = 5,
+        tracking_enabled: bool = True,
+        tracking_persist: bool = True,
+        tracker_config: str = "bytetrack.yaml",
     ) -> None:
         self.camera_service = camera_service
         self.enabled = enabled
@@ -37,6 +40,11 @@ class DetectorService:
         self.inference_fps = inference_fps
         self.jpeg_quality = jpeg_quality
         self.log_interval_seconds = log_interval_seconds
+        self.tracking_enabled = tracking_enabled
+        self.tracking_persist = tracking_persist
+        self.tracker_config = tracker_config
+        self._tracking_runtime_enabled = tracking_enabled
+        self._tracking_fallback_reason: Optional[str] = None
 
         self._model: Optional[Any] = None
         self._thread: Optional[threading.Thread] = None
@@ -54,6 +62,7 @@ class DetectorService:
         self._last_logged_detection_at = 0.0
         self._detector_available = False
         self._is_running = False
+        self._tracked_detections_count = 0
 
         self._latest_annotated_frame: Optional[np.ndarray] = None
         self._latest_annotated_jpeg: Optional[bytes] = None
@@ -155,15 +164,10 @@ class DetectorService:
         if self._model is None:
             raise RuntimeError("Detector model is not loaded")
 
-        results = self._model.predict(
-            source=frame,
-            conf=self.confidence_threshold,
-            iou=self.iou_threshold,
-            max_det=self.max_detections,
-            verbose=False,
-        )
+        results = self._run_model(frame)
 
         if not results:
+            self._tracked_detections_count = 0
             return frame.copy(), self._build_payload(frame, [])
 
         result = results[0]
@@ -171,25 +175,62 @@ class DetectorService:
         detections = self._extract_detections(result)
         return annotated_frame, self._build_payload(frame, detections)
 
+    def _run_model(self, frame: np.ndarray) -> list[Any]:
+        if self._tracking_runtime_enabled:
+            try:
+                return self._model.track(
+                    source=frame,
+                    conf=self.confidence_threshold,
+                    iou=self.iou_threshold,
+                    max_det=self.max_detections,
+                    tracker=self.tracker_config,
+                    persist=self.tracking_persist,
+                    verbose=False,
+                )
+            except ModuleNotFoundError as exc:
+                if exc.name != "lap":
+                    raise
+
+                self._tracking_runtime_enabled = False
+                self._tracking_fallback_reason = (
+                    "Tracking disabled at runtime because dependency 'lap' is not installed. "
+                    "Falling back to plain detection."
+                )
+                self._tracked_detections_count = 0
+                logger.warning(self._tracking_fallback_reason)
+
+        return self._model.predict(
+            source=frame,
+            conf=self.confidence_threshold,
+            iou=self.iou_threshold,
+            max_det=self.max_detections,
+            verbose=False,
+        )
+
     def _extract_detections(self, result: Any) -> list[dict[str, Any]]:
         boxes = getattr(result, "boxes", None)
         names = getattr(result, "names", {}) or {}
 
         if boxes is None:
+            self._tracked_detections_count = 0
             return []
 
         xyxy = boxes.xyxy.cpu().tolist() if boxes.xyxy is not None else []
         confs = boxes.conf.cpu().tolist() if boxes.conf is not None else []
         classes = boxes.cls.cpu().tolist() if boxes.cls is not None else []
+        track_ids = boxes.id.int().cpu().tolist() if getattr(boxes, "id", None) is not None else []
+
+        self._tracked_detections_count = len(track_ids)
 
         detections: list[dict[str, Any]] = []
-        for coords, confidence, class_id in zip(xyxy, confs, classes):
+        for index, (coords, confidence, class_id) in enumerate(zip(xyxy, confs, classes)):
             x1, y1, x2, y2 = [int(value) for value in coords]
             class_id_int = int(class_id)
             detections.append(
                 {
                     "class_id": class_id_int,
                     "class_name": str(names.get(class_id_int, f"class_{class_id_int}")),
+                    "track_id": int(track_ids[index]) if index < len(track_ids) else None,
                     "confidence": round(float(confidence), 4),
                     "x1": x1,
                     "y1": y1,
@@ -242,13 +283,18 @@ class DetectorService:
             return
 
         summary = ", ".join(
-            f"{item['class_name']}({item['confidence']:.2f})"
+            (
+                f"{item['class_name']}#{item['track_id']}({item['confidence']:.2f})"
+                if item.get("track_id") is not None
+                else f"{item['class_name']}({item['confidence']:.2f})"
+            )
             for item in payload["detections"][:5]
         )
         logger.info(
-            "Detections | frame_id=%s | count=%s | items=%s",
+            "Detections | frame_id=%s | count=%s | tracked=%s | items=%s",
             payload["frame_id"],
             payload["detections_count"],
+            self._tracked_detections_count,
             summary,
         )
         self._last_logged_detection_at = now
@@ -286,13 +332,18 @@ class DetectorService:
         return {
             "enabled": self.enabled,
             "model_path": self.model_path,
+            "tracking_enabled": self.tracking_enabled,
+            "tracking_persist": self.tracking_persist,
+            "tracker_config": self.tracker_config,
+            "tracking_runtime_enabled": self._tracking_runtime_enabled,
             "is_running": self._is_running,
             "is_model_loaded": self._model is not None,
             "detector_available": self._detector_available,
             "latest_frame_id": self._latest_frame_id,
             "processed_frames": self._processed_frames,
             "skipped_frames": self._skipped_frames,
+            "tracked_detections_count": self._tracked_detections_count,
             "actual_fps": round(self._actual_fps, 2),
             "last_inference_ms": self._last_inference_ms,
-            "last_error": self._last_error,
+            "last_error": self._last_error or self._tracking_fallback_reason,
         }

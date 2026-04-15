@@ -31,3 +31,19 @@ class UsbCameraInfo(BaseModel):
     width: int | None
     height: int | None
     label: str
+
+
+class CameraListItemResponse(BaseModel):
+    source_type: str
+    source: str
+    label: str
+    is_active: bool
+    is_available: bool
+    frame_width: int | None = None
+    frame_height: int | None = None
+
+
+class CameraListResponse(BaseModel):
+    active_camera: CameraStatusResponse
+    supported_source_types: list[str]
+    cameras: list[CameraListItemResponse]

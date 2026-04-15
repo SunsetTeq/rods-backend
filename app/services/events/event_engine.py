@@ -15,7 +15,11 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class ClassState:
+class TrackedObjectState:
+    state_key: str
+    class_name: str | None = None
+    track_id: int | None = None
+    tracked: bool = False
     state: str = "NOT_PRESENT"
     present_frames: int = 0
     absent_frames: int = 0
@@ -51,7 +55,7 @@ class EventEngineService:
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
 
-        self._states: dict[str, ClassState] = {}
+        self._states: dict[str, TrackedObjectState] = {}
         self._is_running = False
         self._processed_detection_frames = 0
         self._confirmed_events_total = 0
@@ -101,22 +105,37 @@ class EventEngineService:
         width = source_frame_size[0] if source_frame_size else None
         height = source_frame_size[1] if source_frame_size else None
 
-        best_by_class: dict[str, dict[str, Any]] = {}
+        detections_by_state_key: dict[str, dict[str, Any]] = {}
         for detection in detections:
-            class_name = detection["class_name"]
-            existing = best_by_class.get(class_name)
+            state_key = self._build_state_key(detection)
+            existing = detections_by_state_key.get(state_key)
             if existing is None or float(detection["confidence"]) > float(existing["confidence"]):
-                best_by_class[class_name] = detection
+                detections_by_state_key[state_key] = detection
 
         with self._lock:
             self._processed_detection_frames += 1
             self._latest_processed_frame_id = frame_id
             now = time.time()
-            state_keys = set(self._states.keys()) | set(best_by_class.keys())
+            state_keys = set(self._states.keys()) | set(detections_by_state_key.keys())
 
             for state_key in state_keys:
-                detection = best_by_class.get(state_key)
-                state = self._states.setdefault(state_key, ClassState())
+                detection = detections_by_state_key.get(state_key)
+                state = self._states.get(state_key)
+
+                if state is None:
+                    state = TrackedObjectState(
+                        state_key=state_key,
+                        class_name=detection["class_name"] if detection is not None else None,
+                        track_id=(
+                            int(detection["track_id"])
+                            if detection is not None and detection.get("track_id") is not None
+                            else None
+                        ),
+                        tracked=(
+                            detection is not None and detection.get("track_id") is not None
+                        ),
+                    )
+                    self._states[state_key] = state
 
                 if state.state == "COOLDOWN" and state.cooldown_until is not None and now >= state.cooldown_until:
                     state.state = "NOT_PRESENT"
@@ -153,7 +172,7 @@ class EventEngineService:
     def _handle_present_detection(
         self,
         state_key: str,
-        state: ClassState,
+        state: TrackedObjectState,
         detection: dict[str, Any],
         frame_id: int,
         frame_timestamp: str,
@@ -161,6 +180,11 @@ class EventEngineService:
         source_frame_height: int | None,
         now: float,
     ) -> None:
+        state.class_name = detection["class_name"]
+        state.track_id = (
+            int(detection["track_id"]) if detection.get("track_id") is not None else None
+        )
+        state.tracked = state.track_id is not None
         state.last_seen_frame_id = frame_id
         state.latest_confidence = float(detection["confidence"])
         state.class_id = int(detection["class_id"])
@@ -185,6 +209,7 @@ class EventEngineService:
                         "event_type": "confirmed",
                         "class_name": detection["class_name"],
                         "class_id": int(detection["class_id"]),
+                        "track_id": state.track_id,
                         "confidence": float(detection["confidence"]),
                         "state_key": state_key,
                         "first_seen_frame_id": state.first_seen_frame_id or frame_id,
@@ -215,9 +240,10 @@ class EventEngineService:
                 self._confirmed_events_total += 1
                 state.state = "CONFIRMED"
                 logger.info(
-                    "Confirmed event | id=%s | class=%s | confidence=%.2f | frame_id=%s | original=%s | annotated=%s",
+                    "Confirmed event | id=%s | class=%s | track_id=%s | confidence=%.2f | frame_id=%s | original=%s | annotated=%s",
                     event_id,
                     detection["class_name"],
+                    state.track_id,
                     float(detection["confidence"]),
                     frame_id,
                     screenshot_paths["screenshot_original_path"],
@@ -228,7 +254,7 @@ class EventEngineService:
         if state.state == "CONFIRMED":
             state.present_frames += 1
 
-    def _handle_absent_detection(self, state: ClassState, now: float) -> None:
+    def _handle_absent_detection(self, state: TrackedObjectState, now: float) -> None:
         if state.state == "NOT_PRESENT":
             return
 
@@ -276,6 +302,8 @@ class EventEngineService:
                 active_states.append(
                     {
                         "state_key": key,
+                        "class_name": state.class_name,
+                        "track_id": state.track_id,
                         "state": state.state,
                         "present_frames": state.present_frames,
                         "absent_frames": state.absent_frames,
@@ -296,3 +324,10 @@ class EventEngineService:
                 "latest_processed_frame_id": self._latest_processed_frame_id,
                 "active_states": active_states,
             }
+
+    def _build_state_key(self, detection: dict[str, Any]) -> str:
+        class_name = str(detection["class_name"])
+        track_id = detection.get("track_id")
+        if track_id is not None:
+            return f"track:{int(track_id)}:{class_name}"
+        return f"class:{class_name}"

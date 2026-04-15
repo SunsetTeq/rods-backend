@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     vision_max_detections: int = 100
     vision_inference_fps: int = 5
     vision_log_interval_seconds: int = 5
+    vision_tracking_enabled: bool = True
+    vision_tracking_persist: bool = True
+    vision_tracker_config: str = "bytetrack.yaml"
 
     database_path: str = "data/rods.db"
     screenshots_dir: str = "data/screenshots"

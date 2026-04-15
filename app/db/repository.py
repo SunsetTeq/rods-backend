@@ -33,6 +33,7 @@ class EventRepository:
                     event_type TEXT NOT NULL,
                     class_name TEXT NOT NULL,
                     class_id INTEGER,
+                    track_id INTEGER,
                     confidence REAL NOT NULL,
                     state_key TEXT NOT NULL,
                     first_seen_frame_id INTEGER NOT NULL,
@@ -50,6 +51,7 @@ class EventRepository:
                 )
                 """
             )
+            self._ensure_column(connection, "events", "track_id", "INTEGER")
             self._ensure_column(connection, "events", "screenshot_original_path", "TEXT")
             self._ensure_column(connection, "events", "screenshot_annotated_path", "TEXT")
             connection.commit()
@@ -98,6 +100,7 @@ class EventRepository:
                     event_type,
                     class_name,
                     class_id,
+                    track_id,
                     confidence,
                     state_key,
                     first_seen_frame_id,
@@ -112,12 +115,13 @@ class EventRepository:
                     created_at,
                     screenshot_original_path,
                     screenshot_annotated_path
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload["event_type"],
                     payload["class_name"],
                     payload["class_id"],
+                    payload.get("track_id"),
                     payload["confidence"],
                     payload["state_key"],
                     payload["first_seen_frame_id"],
@@ -167,6 +171,7 @@ class EventRepository:
                     event_type,
                     class_name,
                     class_id,
+                    track_id,
                     confidence,
                     state_key,
                     first_seen_frame_id,
@@ -197,6 +202,7 @@ class EventRepository:
                     event_type,
                     class_name,
                     class_id,
+                    track_id,
                     confidence,
                     state_key,
                     first_seen_frame_id,
