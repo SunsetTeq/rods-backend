@@ -76,7 +76,7 @@
                         <input
                             id="text_source"
                             type="text"
-                            placeholder="rtsp://... or D:/video/test.mp4"
+                            placeholder="rtsp://... or data/sample-video.mp4"
                         />
                     </label>
 
@@ -88,11 +88,13 @@
                     <code>/status</code>,
                     <code>/frame.jpg</code>,
                     <code>/mjpeg</code>,
+                    <code>/ws?variant=raw</code>,
                     <code>/select</code>,
                     <code>/sources/usb</code>,
                     <code>/api/v1/vision/status</code>,
                     <code>/api/v1/vision/detections/latest</code>,
-                    <code>/api/v1/vision/mjpeg</code>
+                    <code>/api/v1/vision/mjpeg</code>,
+                    <code>/api/v1/live/ws</code>
                 </p>
 
                 <div id="vision_error_box" class="error hidden">

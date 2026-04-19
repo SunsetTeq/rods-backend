@@ -1,8 +1,10 @@
 import asyncio
+import base64
 from collections.abc import AsyncIterator
+from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from app.core.config import settings
@@ -78,6 +80,72 @@ def get_mjpeg_stream(request: Request) -> StreamingResponse:
         mjpeg_generator(request),
         media_type=f"multipart/x-mixed-replace; boundary={settings.stream_boundary}",
     )
+
+
+@router.websocket("/ws")
+async def stream_websocket(
+    websocket: WebSocket,
+    variant: str = Query(default="raw"),
+) -> None:
+    await websocket.accept()
+    if variant not in {"raw", "annotated"}:
+        await websocket.send_json(
+            {
+                "type": "error",
+                "detail": "Unsupported stream variant. Use 'raw' or 'annotated'.",
+                "sent_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        await websocket.close(code=1008)
+        return
+
+    target_interval = 1.0 / max(settings.stream_ws_fps, 1)
+    last_payload: str | None = None
+
+    try:
+        await websocket.send_json(
+            {
+                "type": "hello",
+                "channel": "frames",
+                "variant": variant,
+                "fps": settings.stream_ws_fps,
+                "sent_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
+        while True:
+            jpeg = _get_stream_frame_bytes(variant)
+            if jpeg is None:
+                await asyncio.sleep(0.05)
+                continue
+
+            encoded = base64.b64encode(jpeg).decode("ascii")
+            if encoded != last_payload:
+                await websocket.send_json(
+                    {
+                        "type": "frame",
+                        "channel": "frames",
+                        "variant": variant,
+                        "format": "image/jpeg",
+                        "encoding": "base64",
+                        "sent_at": datetime.now(timezone.utc).isoformat(),
+                        "data": encoded,
+                    }
+                )
+                last_payload = encoded
+
+            await asyncio.sleep(target_interval)
+    except WebSocketDisconnect:
+        return
+
+
+def _get_stream_frame_bytes(variant: str) -> bytes | None:
+    if variant == "annotated":
+        from app.services.vision.provider import detector_service
+
+        return detector_service.get_latest_annotated_jpeg()
+
+    return camera_service.get_latest_jpeg()
 
 
 @router.get("/view")

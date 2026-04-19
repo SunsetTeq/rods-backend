@@ -5,3 +5,4 @@ pydantic-settings
 numpy
 ultralytics
 lapx
+websockets

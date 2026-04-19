@@ -5,28 +5,15 @@ from fastapi.responses import FileResponse
 
 from app.core.config import settings
 from app.schemas.event import EventEngineStatusResponse, EventResponse
+from app.services.events.serialization import serialize_event_row
 from app.services.events.provider import event_engine_service, event_repository
 from app.services.storage.provider import screenshot_service
 
 
 router = APIRouter(prefix="/api/v1/events", tags=["events"])
 
-
 def _serialize_event(row: dict) -> EventResponse:
-    event_id = int(row["id"])
-    original_path = row.get("screenshot_original_path")
-    annotated_path = row.get("screenshot_annotated_path")
-
-    payload = {
-        **row,
-        "screenshot_original_url": (
-            f"/api/v1/events/{event_id}/screenshots/original" if original_path else None
-        ),
-        "screenshot_annotated_url": (
-            f"/api/v1/events/{event_id}/screenshots/annotated" if annotated_path else None
-        ),
-    }
-    return EventResponse(**payload)
+    return EventResponse(**serialize_event_row(row))
 
 
 @router.get("/status", response_model=EventEngineStatusResponse)

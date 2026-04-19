@@ -15,6 +15,7 @@ class Settings(BaseSettings):
 
     frame_jpeg_quality: int = 85
     stream_boundary: str = "frame"
+    stream_ws_fps: int = 5
 
     vision_enabled: bool = True
     vision_model_path: str = "yolov8n.pt"
@@ -33,6 +34,7 @@ class Settings(BaseSettings):
     event_absent_frames: int = 12
     event_cooldown_seconds: int = 30
     event_recent_limit: int = 100
+    live_ping_interval_seconds: int = 15
 
     model_config = SettingsConfigDict(
         env_file=".env",

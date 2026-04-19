@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import asyncio
 import logging
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.routes.cameras import router as cameras_router
 from app.api.routes.health import router as health_router
 from app.api.routes.events import router as events_router
+from app.api.routes.live import router as live_router
 from app.api.routes.settings import router as settings_router
 from app.api.routes.stream import router as stream_router
 from app.api.routes.vision import router as vision_router
@@ -15,6 +17,7 @@ from app.core.config import settings
 from app.core.logging import setup_logging
 from app.services.capture.provider import camera_service
 from app.services.events.provider import event_engine_service
+from app.services.live_event_provider import live_event_service
 from app.services.vision.provider import detector_service
 
 
@@ -23,6 +26,7 @@ setup_logging()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    live_event_service.start(asyncio.get_running_loop())
     try:
         camera_service.start()
     except Exception:
@@ -35,6 +39,7 @@ async def lifespan(app: FastAPI):
     event_engine_service.stop()
     detector_service.stop()
     camera_service.stop()
+    live_event_service.stop()
 
 
 app = FastAPI(
@@ -49,6 +54,7 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.include_router(health_router)
 app.include_router(cameras_router)
 app.include_router(events_router)
+app.include_router(live_router)
 app.include_router(settings_router)
 app.include_router(stream_router)
 app.include_router(vision_router)

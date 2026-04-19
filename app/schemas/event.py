@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class EventResponse(BaseModel):
@@ -7,6 +7,7 @@ class EventResponse(BaseModel):
     class_name: str
     class_id: int | None
     track_id: int | None = None
+    observed_classes: list[str] = Field(default_factory=list)
     confidence: float
     state_key: str
     first_seen_frame_id: int
@@ -23,6 +24,11 @@ class EventResponse(BaseModel):
     screenshot_annotated_path: str | None = None
     screenshot_original_url: str | None = None
     screenshot_annotated_url: str | None = None
+
+
+class LiveEventStatusResponse(BaseModel):
+    is_running: bool
+    subscribers: int
 
 
 class EventEngineStateItemResponse(BaseModel):

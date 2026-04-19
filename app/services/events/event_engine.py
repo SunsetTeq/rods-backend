@@ -1,12 +1,14 @@
 import logging
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
 from app.db.repository import EventRepository
 from app.services.capture.camera_service import CameraService
+from app.services.events.serialization import serialize_event_row
+from app.services.live_event_provider import live_event_service
 from app.services.storage.screenshot_service import ScreenshotService
 from app.services.vision.detector_service import DetectorService
 
@@ -28,6 +30,8 @@ class TrackedObjectState:
     last_seen_frame_id: int | None = None
     latest_confidence: float | None = None
     class_id: int | None = None
+    confirmed_event_id: int | None = None
+    observed_classes: set[str] = field(default_factory=set)
 
 
 class EventEngineService:
@@ -104,13 +108,7 @@ class EventEngineService:
         source_frame_size = payload.get("source_frame_size")
         width = source_frame_size[0] if source_frame_size else None
         height = source_frame_size[1] if source_frame_size else None
-
-        detections_by_state_key: dict[str, dict[str, Any]] = {}
-        for detection in detections:
-            state_key = self._build_state_key(detection)
-            existing = detections_by_state_key.get(state_key)
-            if existing is None or float(detection["confidence"]) > float(existing["confidence"]):
-                detections_by_state_key[state_key] = detection
+        detections_by_state_key = self._group_detections_by_state_key(detections)
 
         with self._lock:
             self._processed_detection_frames += 1
@@ -119,36 +117,25 @@ class EventEngineService:
             state_keys = set(self._states.keys()) | set(detections_by_state_key.keys())
 
             for state_key in state_keys:
-                detection = detections_by_state_key.get(state_key)
+                detection_group = detections_by_state_key.get(state_key)
                 state = self._states.get(state_key)
 
                 if state is None:
-                    state = TrackedObjectState(
-                        state_key=state_key,
-                        class_name=detection["class_name"] if detection is not None else None,
-                        track_id=(
-                            int(detection["track_id"])
-                            if detection is not None and detection.get("track_id") is not None
-                            else None
-                        ),
-                        tracked=(
-                            detection is not None and detection.get("track_id") is not None
-                        ),
-                    )
+                    state = self._create_state(state_key=state_key, detection_group=detection_group)
                     self._states[state_key] = state
 
-                if state.state == "COOLDOWN" and state.cooldown_until is not None and now >= state.cooldown_until:
-                    state.state = "NOT_PRESENT"
-                    state.present_frames = 0
-                    state.absent_frames = 0
-                    state.cooldown_until = None
-                    state.first_seen_frame_id = None
+                if (
+                    state.state == "COOLDOWN"
+                    and state.cooldown_until is not None
+                    and now >= state.cooldown_until
+                ):
+                    self._reset_state(state)
 
-                if detection is not None:
+                if detection_group is not None:
                     self._handle_present_detection(
                         state_key=state_key,
                         state=state,
-                        detection=detection,
+                        detection_group=detection_group,
                         frame_id=frame_id,
                         frame_timestamp=frame_timestamp,
                         source_frame_width=width,
@@ -169,25 +156,47 @@ class EventEngineService:
                 )
             }
 
+    def _create_state(
+        self,
+        state_key: str,
+        detection_group: dict[str, Any] | None,
+    ) -> TrackedObjectState:
+        if detection_group is None:
+            return TrackedObjectState(state_key=state_key)
+
+        return TrackedObjectState(
+            state_key=state_key,
+            class_name=detection_group["class_name"],
+            track_id=detection_group.get("track_id"),
+            tracked=detection_group.get("track_id") is not None,
+            observed_classes=set(detection_group["observed_classes"]),
+        )
+
     def _handle_present_detection(
         self,
         state_key: str,
         state: TrackedObjectState,
-        detection: dict[str, Any],
+        detection_group: dict[str, Any],
         frame_id: int,
         frame_timestamp: str,
         source_frame_width: int | None,
         source_frame_height: int | None,
         now: float,
     ) -> None:
-        state.class_name = detection["class_name"]
-        state.track_id = (
-            int(detection["track_id"]) if detection.get("track_id") is not None else None
-        )
+        previous_classes = set(state.observed_classes)
+        current_classes = set(detection_group["observed_classes"])
+
+        if state.state != "CONFIRMED" or state.class_name is None:
+            state.class_name = detection_group["class_name"]
+            state.class_id = detection_group["class_id"]
+        state.track_id = detection_group.get("track_id")
         state.tracked = state.track_id is not None
         state.last_seen_frame_id = frame_id
-        state.latest_confidence = float(detection["confidence"])
-        state.class_id = int(detection["class_id"])
+        state.latest_confidence = float(detection_group["confidence"])
+        if state.observed_classes:
+            state.observed_classes |= current_classes
+        else:
+            state.observed_classes = current_classes
         state.absent_frames = 0
 
         if state.state == "COOLDOWN" and state.cooldown_until is not None and now < state.cooldown_until:
@@ -202,57 +211,141 @@ class EventEngineService:
         if state.state == "CANDIDATE":
             state.present_frames += 1
             if state.present_frames >= self.stable_frames:
-                original_frame = self.camera_service.get_latest_frame()
-                annotated_frame = self.detector_service.get_latest_annotated_frame()
-                event_id = self.repository.create_event(
-                    {
-                        "event_type": "confirmed",
-                        "class_name": detection["class_name"],
-                        "class_id": int(detection["class_id"]),
-                        "track_id": state.track_id,
-                        "confidence": float(detection["confidence"]),
-                        "state_key": state_key,
-                        "first_seen_frame_id": state.first_seen_frame_id or frame_id,
-                        "confirmed_frame_id": frame_id,
-                        "last_seen_frame_id": frame_id,
-                        "stable_frames_required": self.stable_frames,
-                        "absent_frames_required": self.absent_frames,
-                        "cooldown_seconds": self.cooldown_seconds,
-                        "source_frame_width": source_frame_width,
-                        "source_frame_height": source_frame_height,
-                        "frame_timestamp": frame_timestamp,
-                        "created_at": datetime.now(timezone.utc).isoformat(),
-                        "screenshot_original_path": None,
-                        "screenshot_annotated_path": None,
-                    }
-                )
-                screenshot_paths = self.screenshot_service.save_event_frames(
-                    event_id=event_id,
-                    original_frame=original_frame,
-                    annotated_frame=annotated_frame,
+                event_id = self._create_confirmed_event(
+                    state_key=state_key,
+                    state=state,
+                    frame_id=frame_id,
                     frame_timestamp=frame_timestamp,
+                    source_frame_width=source_frame_width,
+                    source_frame_height=source_frame_height,
                 )
-                self.repository.update_event_screenshots(
-                    event_id=event_id,
-                    screenshot_original_path=screenshot_paths["screenshot_original_path"],
-                    screenshot_annotated_path=screenshot_paths["screenshot_annotated_path"],
-                )
-                self._confirmed_events_total += 1
+                state.confirmed_event_id = event_id
                 state.state = "CONFIRMED"
-                logger.info(
-                    "Confirmed event | id=%s | class=%s | track_id=%s | confidence=%.2f | frame_id=%s | original=%s | annotated=%s",
-                    event_id,
-                    detection["class_name"],
-                    state.track_id,
-                    float(detection["confidence"]),
-                    frame_id,
-                    screenshot_paths["screenshot_original_path"],
-                    screenshot_paths["screenshot_annotated_path"],
-                )
             return
 
         if state.state == "CONFIRMED":
             state.present_frames += 1
+            if state.observed_classes != previous_classes:
+                self._update_confirmed_event(
+                    state=state,
+                    frame_id=frame_id,
+                    frame_timestamp=frame_timestamp,
+                )
+
+    def _create_confirmed_event(
+        self,
+        state_key: str,
+        state: TrackedObjectState,
+        frame_id: int,
+        frame_timestamp: str,
+        source_frame_width: int | None,
+        source_frame_height: int | None,
+    ) -> int:
+        original_frame = self.camera_service.get_latest_frame()
+        annotated_frame = self.detector_service.get_latest_annotated_frame()
+        event_id = self.repository.create_event(
+            {
+                "event_type": "confirmed",
+                "class_name": state.class_name or "unknown",
+                "class_id": state.class_id,
+                "track_id": state.track_id,
+                "observed_classes": sorted(state.observed_classes),
+                "confidence": float(state.latest_confidence or 0.0),
+                "state_key": state_key,
+                "first_seen_frame_id": state.first_seen_frame_id or frame_id,
+                "confirmed_frame_id": frame_id,
+                "last_seen_frame_id": frame_id,
+                "stable_frames_required": self.stable_frames,
+                "absent_frames_required": self.absent_frames,
+                "cooldown_seconds": self.cooldown_seconds,
+                "source_frame_width": source_frame_width,
+                "source_frame_height": source_frame_height,
+                "frame_timestamp": frame_timestamp,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": None,
+                "screenshot_original_path": None,
+                "screenshot_annotated_path": None,
+            }
+        )
+        screenshot_paths = self.screenshot_service.save_event_frames(
+            event_id=event_id,
+            original_frame=original_frame,
+            annotated_frame=annotated_frame,
+            frame_timestamp=frame_timestamp,
+        )
+        self.repository.update_event_screenshots(
+            event_id=event_id,
+            screenshot_original_path=screenshot_paths["screenshot_original_path"],
+            screenshot_annotated_path=screenshot_paths["screenshot_annotated_path"],
+        )
+        self._confirmed_events_total += 1
+
+        row = self.repository.get_event_by_id(event_id)
+        if row is not None:
+            live_event_service.publish_from_thread(
+                live_event_service.build_message(
+                    message_type="event_confirmed",
+                    event=serialize_event_row(row),
+                )
+            )
+
+        logger.info(
+            "Confirmed event | id=%s | class=%s | track_id=%s | classes=%s | confidence=%.2f | frame_id=%s",
+            event_id,
+            state.class_name,
+            state.track_id,
+            ",".join(sorted(state.observed_classes)),
+            float(state.latest_confidence or 0.0),
+            frame_id,
+        )
+        return event_id
+
+    def _update_confirmed_event(
+        self,
+        state: TrackedObjectState,
+        frame_id: int,
+        frame_timestamp: str,
+    ) -> None:
+        if state.confirmed_event_id is None:
+            return
+
+        original_frame = self.camera_service.get_latest_frame()
+        annotated_frame = self.detector_service.get_latest_annotated_frame()
+        screenshot_paths = self.screenshot_service.save_event_frames(
+            event_id=state.confirmed_event_id,
+            original_frame=original_frame,
+            annotated_frame=annotated_frame,
+            frame_timestamp=frame_timestamp,
+        )
+
+        self.repository.update_event_observed_classes(
+            event_id=state.confirmed_event_id,
+            observed_classes=sorted(state.observed_classes),
+            confidence=float(state.latest_confidence or 0.0),
+            class_name=state.class_name or "unknown",
+            class_id=state.class_id,
+            last_seen_frame_id=frame_id,
+            frame_timestamp=frame_timestamp,
+            screenshot_original_path=screenshot_paths["screenshot_original_path"],
+            screenshot_annotated_path=screenshot_paths["screenshot_annotated_path"],
+        )
+
+        row = self.repository.get_event_by_id(state.confirmed_event_id)
+        if row is not None:
+            live_event_service.publish_from_thread(
+                live_event_service.build_message(
+                    message_type="event_updated",
+                    event=serialize_event_row(row),
+                )
+            )
+
+        logger.info(
+            "Updated confirmed event | id=%s | track_id=%s | classes=%s | frame_id=%s",
+            state.confirmed_event_id,
+            state.track_id,
+            ",".join(sorted(state.observed_classes)),
+            frame_id,
+        )
 
     def _handle_absent_detection(self, state: TrackedObjectState, now: float) -> None:
         if state.state == "NOT_PRESENT":
@@ -260,13 +353,7 @@ class EventEngineService:
 
         if state.state == "COOLDOWN":
             if state.cooldown_until is not None and now >= state.cooldown_until:
-                state.state = "NOT_PRESENT"
-                state.present_frames = 0
-                state.absent_frames = 0
-                state.cooldown_until = None
-                state.first_seen_frame_id = None
-                state.last_seen_frame_id = None
-                state.latest_confidence = None
+                self._reset_state(state)
             return
 
         state.absent_frames += 1
@@ -274,12 +361,7 @@ class EventEngineService:
             return
 
         if state.state == "CANDIDATE":
-            state.state = "NOT_PRESENT"
-            state.present_frames = 0
-            state.absent_frames = 0
-            state.first_seen_frame_id = None
-            state.last_seen_frame_id = None
-            state.latest_confidence = None
+            self._reset_state(state)
             return
 
         if state.state == "CONFIRMED":
@@ -287,7 +369,60 @@ class EventEngineService:
             state.present_frames = 0
             state.absent_frames = 0
             state.cooldown_until = now + self.cooldown_seconds
-            return
+
+    def _reset_state(self, state: TrackedObjectState) -> None:
+        state.state = "NOT_PRESENT"
+        state.class_name = None
+        state.class_id = None
+        state.track_id = None
+        state.tracked = False
+        state.present_frames = 0
+        state.absent_frames = 0
+        state.cooldown_until = None
+        state.first_seen_frame_id = None
+        state.last_seen_frame_id = None
+        state.latest_confidence = None
+        state.confirmed_event_id = None
+        state.observed_classes = set()
+
+    def _group_detections_by_state_key(
+        self,
+        detections: list[dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        grouped: dict[str, dict[str, Any]] = {}
+
+        for detection in detections:
+            state_key = self._build_state_key(detection)
+            entry = grouped.get(state_key)
+            if entry is None:
+                entry = {
+                    "class_name": detection["class_name"],
+                    "class_id": int(detection["class_id"]),
+                    "track_id": (
+                        int(detection["track_id"])
+                        if detection.get("track_id") is not None
+                        else None
+                    ),
+                    "confidence": float(detection["confidence"]),
+                    "observed_classes": {str(detection["class_name"])},
+                }
+                grouped[state_key] = entry
+                continue
+
+            entry["observed_classes"].add(str(detection["class_name"]))
+            if float(detection["confidence"]) > float(entry["confidence"]):
+                entry["class_name"] = detection["class_name"]
+                entry["class_id"] = int(detection["class_id"])
+                entry["confidence"] = float(detection["confidence"])
+
+        normalized: dict[str, dict[str, Any]] = {}
+        for state_key, entry in grouped.items():
+            normalized[state_key] = {
+                **entry,
+                "observed_classes": sorted(entry["observed_classes"]),
+            }
+
+        return normalized
 
     def get_status(self) -> dict[str, Any]:
         with self._lock:
@@ -296,7 +431,8 @@ class EventEngineService:
                 cooldown_until = None
                 if state.cooldown_until is not None:
                     cooldown_until = datetime.fromtimestamp(
-                        state.cooldown_until, tz=timezone.utc
+                        state.cooldown_until,
+                        tz=timezone.utc,
                     ).isoformat()
 
                 active_states.append(
@@ -326,8 +462,7 @@ class EventEngineService:
             }
 
     def _build_state_key(self, detection: dict[str, Any]) -> str:
-        class_name = str(detection["class_name"])
         track_id = detection.get("track_id")
         if track_id is not None:
-            return f"track:{int(track_id)}:{class_name}"
-        return f"class:{class_name}"
+            return f"track:{int(track_id)}"
+        return f"class:{str(detection['class_name'])}"
