@@ -162,6 +162,19 @@ class EventRepository:
             )
             connection.commit()
 
+    def clear_events(self, reset_sequence: bool = True) -> int:
+        with self._connect() as connection:
+            row = connection.execute("SELECT COUNT(*) AS total FROM events").fetchone()
+            deleted_count = int(row["total"]) if row is not None else 0
+            connection.execute("DELETE FROM events")
+            if reset_sequence:
+                connection.execute(
+                    "DELETE FROM sqlite_sequence WHERE name = ?",
+                    ("events",),
+                )
+            connection.commit()
+            return deleted_count
+
     def get_event_by_id(self, event_id: int) -> dict[str, Any] | None:
         with self._connect() as connection:
             row = connection.execute(
