@@ -1,6 +1,5 @@
 import sqlite3
 from datetime import datetime, timezone
-import json
 from pathlib import Path
 from typing import Any
 
@@ -142,7 +141,7 @@ class EventRepository:
                     payload["frame_timestamp"],
                     payload["created_at"],
                     payload.get("updated_at"),
-                    self._serialize_classes(payload.get("observed_classes")),
+                    None,
                     payload.get("screenshot_original_path"),
                     payload.get("screenshot_annotated_path"),
                 ),
@@ -171,44 +170,23 @@ class EventRepository:
             )
             connection.commit()
 
-    def update_event_observed_classes(
+    def update_event_last_seen(
         self,
         event_id: int,
-        observed_classes: list[str],
-        confidence: float,
-        class_name: str,
-        class_id: int | None,
         last_seen_frame_id: int,
-        frame_timestamp: str,
-        screenshot_original_path: str | None,
-        screenshot_annotated_path: str | None,
     ) -> None:
         with self._connect() as connection:
             connection.execute(
                 """
                 UPDATE events
                 SET
-                    observed_classes_json = ?,
-                    confidence = ?,
-                    class_name = ?,
-                    class_id = ?,
                     last_seen_frame_id = ?,
-                    frame_timestamp = ?,
-                    updated_at = ?,
-                    screenshot_original_path = ?,
-                    screenshot_annotated_path = ?
+                    updated_at = ?
                 WHERE id = ?
                 """,
                 (
-                    self._serialize_classes(observed_classes),
-                    confidence,
-                    class_name,
-                    class_id,
                     last_seen_frame_id,
-                    frame_timestamp,
                     datetime.now(timezone.utc).isoformat(),
-                    screenshot_original_path,
-                    screenshot_annotated_path,
                     event_id,
                 ),
             )
@@ -293,7 +271,3 @@ class EventRepository:
                 (limit,),
             ).fetchall()
         return [dict(row) for row in rows]
-
-    def _serialize_classes(self, observed_classes: list[str] | None) -> str:
-        normalized = sorted({str(item) for item in (observed_classes or [])})
-        return json.dumps(normalized, ensure_ascii=True)

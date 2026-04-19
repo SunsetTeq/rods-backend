@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class EventResponse(BaseModel):
@@ -7,7 +7,6 @@ class EventResponse(BaseModel):
     class_name: str
     class_id: int | None
     track_id: int | None = None
-    observed_classes: list[str] = Field(default_factory=list)
     confidence: float
     state_key: str
     first_seen_frame_id: int

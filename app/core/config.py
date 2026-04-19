@@ -7,6 +7,7 @@ class Settings(BaseSettings):
 
     camera_source_type: str = "usb"   # usb | rtsp | file
     camera_source: str = "0"          # для usb: индекс камеры в виде строки
+    camera_capture_backend: str = "auto"
     camera_default_usb_index: int = 0
     camera_discovery_max_index: int = 5
     camera_width: int = 1280

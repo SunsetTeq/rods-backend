@@ -5,13 +5,18 @@ from time import perf_counter
 import cv2
 
 from app.core.config import settings
+from app.services.capture.camera_service import build_video_capture
 
 
-def inspect_usb_cameras(max_index: int) -> None:
+def inspect_usb_cameras(max_index: int, backend: str) -> None:
     print(f"Scanning USB camera indexes 0..{max_index}")
 
     for index in range(max_index + 1):
-        capture = cv2.VideoCapture(index)
+        capture, active_backend = build_video_capture(
+            source_type="usb",
+            source=str(index),
+            preferred_backend=backend,
+        )
         opened = capture.isOpened()
 
         width = None
@@ -26,7 +31,8 @@ def inspect_usb_cameras(max_index: int) -> None:
 
         print(
             f"[{index}] opened={opened} "
-            f"resolution={width or '-'}x{height or '-'} fps={round(fps, 2) if fps else '-'}"
+            f"resolution={width or '-'}x{height or '-'} "
+            f"fps={round(fps, 2) if fps else '-'} backend={active_backend}"
         )
         capture.release()
 
@@ -37,11 +43,15 @@ def inspect_source(
     width: int,
     height: int,
     fps: int,
+    backend: str,
     preview_path: Path,
     warmup_seconds: float,
 ) -> int:
-    resolved_source = int(source) if source_type == "usb" else source
-    capture = cv2.VideoCapture(resolved_source)
+    capture, active_backend = build_video_capture(
+        source_type=source_type,
+        source=source,
+        preferred_backend=backend,
+    )
 
     if not capture.isOpened():
         print(f"Failed to open source: {source}")
@@ -74,6 +84,7 @@ def inspect_source(
 
     print(f"Source type: {source_type}")
     print(f"Source: {source}")
+    print(f"Backend: {active_backend}")
     print(f"Frames read: {frames_read}")
     print(f"Measured FPS: {actual_fps:.2f}")
     print(f"Last frame size: {actual_width}x{actual_height}")
@@ -103,6 +114,11 @@ def main() -> int:
         default=str(settings.camera_source),
         help="USB index, RTSP URL, or file path.",
     )
+    parser.add_argument(
+        "--backend",
+        default=settings.camera_capture_backend,
+        help="OpenCV backend: auto, any, avfoundation, dshow, msmf, ffmpeg, gstreamer, v4l2.",
+    )
     parser.add_argument("--width", type=int, default=settings.camera_width)
     parser.add_argument("--height", type=int, default=settings.camera_height)
     parser.add_argument("--fps", type=int, default=settings.camera_fps)
@@ -123,11 +139,12 @@ def main() -> int:
     print("RODS camera test")
     print(f"Using defaults from .env where arguments are omitted.")
     print(f"Configured source: {args.source_type}:{args.source}")
+    print(f"Preferred backend: {args.backend}")
     print(f"Target size: {args.width}x{args.height} @ {args.fps} FPS")
     print()
 
     if args.scan_usb:
-        inspect_usb_cameras(args.max_index)
+        inspect_usb_cameras(args.max_index, args.backend)
         print()
 
     return inspect_source(
@@ -136,6 +153,7 @@ def main() -> int:
         width=args.width,
         height=args.height,
         fps=args.fps,
+        backend=args.backend,
         preview_path=args.preview_path,
         warmup_seconds=args.warmup_seconds,
     )

@@ -1,4 +1,5 @@
 import logging
+import platform
 import threading
 import time
 from typing import Optional
@@ -9,12 +10,77 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+_CAPTURE_BACKEND_ALIASES = {
+    "any": None,
+    "auto": None,
+    "avfoundation": getattr(cv2, "CAP_AVFOUNDATION", None),
+    "dshow": getattr(cv2, "CAP_DSHOW", None),
+    "msmf": getattr(cv2, "CAP_MSMF", None),
+    "ffmpeg": getattr(cv2, "CAP_FFMPEG", None),
+    "gstreamer": getattr(cv2, "CAP_GSTREAMER", None),
+    "v4l2": getattr(cv2, "CAP_V4L2", None),
+}
+
+
+def resolve_capture_backend(source_type: str, preferred_backend: str = "auto") -> tuple[int | None, str]:
+    backend_name = preferred_backend.strip().lower() if preferred_backend else "auto"
+
+    if backend_name not in _CAPTURE_BACKEND_ALIASES:
+        raise ValueError(f"Unsupported camera backend: {preferred_backend}")
+
+    explicit_backend = _CAPTURE_BACKEND_ALIASES[backend_name]
+    if backend_name not in {"auto", "any"}:
+        if explicit_backend is None:
+            raise ValueError(
+                f"Camera backend '{preferred_backend}' is not available in this OpenCV build"
+            )
+        return explicit_backend, backend_name
+
+    if source_type == "usb":
+        system_name = platform.system().lower()
+        if system_name == "darwin" and getattr(cv2, "CAP_AVFOUNDATION", None) is not None:
+            return cv2.CAP_AVFOUNDATION, "avfoundation"
+        if system_name == "windows" and getattr(cv2, "CAP_DSHOW", None) is not None:
+            return cv2.CAP_DSHOW, "dshow"
+
+    return None, "default"
+
+
+def build_video_capture(
+    source_type: str,
+    source: str,
+    preferred_backend: str = "auto",
+) -> tuple[cv2.VideoCapture, str]:
+    resolved_source: int | str = int(source) if source_type == "usb" else source
+    backend, backend_name = resolve_capture_backend(
+        source_type=source_type,
+        preferred_backend=preferred_backend,
+    )
+
+    if backend is None:
+        return cv2.VideoCapture(resolved_source), backend_name
+
+    capture = cv2.VideoCapture(resolved_source, backend)
+    if capture.isOpened():
+        return capture, backend_name
+
+    logger.warning(
+        "Failed to open source with preferred backend, falling back to OpenCV default | "
+        "source_type=%s | source=%s | backend=%s",
+        source_type,
+        source,
+        backend_name,
+    )
+    capture.release()
+    return cv2.VideoCapture(resolved_source), "default"
+
 
 class CameraService:
     def __init__(
         self,
         source_type: str,
         source: str,
+        capture_backend: str = "auto",
         width: int = 1280,
         height: int = 720,
         fps: int = 30,
@@ -22,6 +88,7 @@ class CameraService:
     ) -> None:
         self.source_type = source_type
         self.source = source
+        self.capture_backend = capture_backend
         self.width = width
         self.height = height
         self.fps = fps
@@ -43,13 +110,7 @@ class CameraService:
         self._last_fps_calc_time = time.time()
         self._fps_counter = 0
         self._is_running = False
-
-    def _resolve_source(self):
-        if self.source_type == "usb":
-            return int(self.source)
-        if self.source_type in {"rtsp", "file"}:
-            return self.source
-        raise ValueError(f"Unsupported source_type: {self.source_type}")
+        self._active_backend_name = "default"
 
     def _reset_runtime_stats(self) -> None:
         self._frames_read = 0
@@ -67,16 +128,20 @@ class CameraService:
             logger.info("Camera service already running")
             return
 
-        resolved_source = self._resolve_source()
         logger.info(
-            "Starting camera service | source_type=%s | source=%s",
+            "Starting camera service | source_type=%s | source=%s | backend=%s",
             self.source_type,
             self.source,
+            self.capture_backend,
         )
 
         self._reset_runtime_stats()
         self._last_error = None
-        self._capture = cv2.VideoCapture(resolved_source)
+        self._capture, self._active_backend_name = build_video_capture(
+            source_type=self.source_type,
+            source=self.source,
+            preferred_backend=self.capture_backend,
+        )
 
         if not self._capture.isOpened():
             self._last_error = f"Failed to open camera source: {self.source}"
@@ -98,7 +163,7 @@ class CameraService:
         self._thread.start()
         self._is_running = True
 
-        logger.info("Camera service started")
+        logger.info("Camera service started | backend=%s", self._active_backend_name)
 
     def stop(self) -> None:
         with self._state_lock:
@@ -118,6 +183,7 @@ class CameraService:
             self._capture = None
 
         self._is_running = False
+        self._active_backend_name = "default"
         if clear_error:
             self._last_error = None
         logger.info("Camera service stopped")
@@ -246,7 +312,11 @@ class CameraService:
                 width = status["frame_width"]
                 height = status["frame_height"]
             else:
-                capture = cv2.VideoCapture(index)
+                capture, _ = build_video_capture(
+                    source_type="usb",
+                    source=str(index),
+                    preferred_backend=self.capture_backend,
+                )
                 is_opened = capture.isOpened()
                 width = None
                 height = None

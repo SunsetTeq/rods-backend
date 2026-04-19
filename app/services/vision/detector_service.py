@@ -33,7 +33,7 @@ class DetectorService:
     ) -> None:
         self.camera_service = camera_service
         self.enabled = enabled
-        self.model_path = model_path
+        self.model_path = self._resolve_model_path(model_path)
         self.confidence_threshold = confidence_threshold
         self.iou_threshold = iou_threshold
         self.max_detections = max_detections
@@ -73,6 +73,34 @@ class DetectorService:
             "detections_count": 0,
             "detections": [],
         }
+
+    def _resolve_model_path(self, model_path: str) -> str:
+        normalized_path = model_path.strip().replace("\\", os.sep)
+        if not normalized_path:
+            return model_path
+
+        repo_root = Path(__file__).resolve().parents[3]
+        candidates: list[Path] = []
+
+        direct_candidate = Path(normalized_path).expanduser()
+        candidates.append(direct_candidate)
+
+        if not direct_candidate.is_absolute():
+            candidates.append(repo_root / direct_candidate)
+
+        basename_candidate = repo_root / Path(normalized_path).name
+        candidates.append(basename_candidate)
+
+        seen_candidates: set[str] = set()
+        for candidate in candidates:
+            candidate_key = str(candidate)
+            if candidate_key in seen_candidates:
+                continue
+            seen_candidates.add(candidate_key)
+            if candidate.exists():
+                return str(candidate.resolve())
+
+        return normalized_path
 
     def start(self) -> None:
         if not self.enabled:

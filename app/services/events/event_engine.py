@@ -1,7 +1,7 @@
 import logging
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 class TrackedObjectState:
     state_key: str
     class_name: str | None = None
+    class_id: int | None = None
     track_id: int | None = None
-    tracked: bool = False
     state: str = "NOT_PRESENT"
     present_frames: int = 0
     absent_frames: int = 0
@@ -29,9 +29,7 @@ class TrackedObjectState:
     first_seen_frame_id: int | None = None
     last_seen_frame_id: int | None = None
     latest_confidence: float | None = None
-    class_id: int | None = None
     confirmed_event_id: int | None = None
-    observed_classes: set[str] = field(default_factory=set)
 
 
 class EventEngineService:
@@ -64,6 +62,7 @@ class EventEngineService:
         self._processed_detection_frames = 0
         self._confirmed_events_total = 0
         self._latest_processed_frame_id = 0
+        self._last_untracked_warning_at = 0.0
 
     def start(self) -> None:
         if self._is_running:
@@ -108,7 +107,16 @@ class EventEngineService:
         source_frame_size = payload.get("source_frame_size")
         width = source_frame_size[0] if source_frame_size else None
         height = source_frame_size[1] if source_frame_size else None
-        detections_by_state_key = self._group_detections_by_state_key(detections)
+        detections_by_state_key = self._group_detections_by_track_id(detections)
+
+        if detections and not detections_by_state_key:
+            now = time.time()
+            if now - self._last_untracked_warning_at >= 10:
+                logger.warning(
+                    "Event engine skipped detections without track_id. "
+                    "Tracking must be available for event creation."
+                )
+                self._last_untracked_warning_at = now
 
         with self._lock:
             self._processed_detection_frames += 1
@@ -167,9 +175,8 @@ class EventEngineService:
         return TrackedObjectState(
             state_key=state_key,
             class_name=detection_group["class_name"],
+            class_id=detection_group["class_id"],
             track_id=detection_group.get("track_id"),
-            tracked=detection_group.get("track_id") is not None,
-            observed_classes=set(detection_group["observed_classes"]),
         )
 
     def _handle_present_detection(
@@ -183,20 +190,12 @@ class EventEngineService:
         source_frame_height: int | None,
         now: float,
     ) -> None:
-        previous_classes = set(state.observed_classes)
-        current_classes = set(detection_group["observed_classes"])
-
         if state.state != "CONFIRMED" or state.class_name is None:
             state.class_name = detection_group["class_name"]
             state.class_id = detection_group["class_id"]
         state.track_id = detection_group.get("track_id")
-        state.tracked = state.track_id is not None
         state.last_seen_frame_id = frame_id
         state.latest_confidence = float(detection_group["confidence"])
-        if state.observed_classes:
-            state.observed_classes |= current_classes
-        else:
-            state.observed_classes = current_classes
         state.absent_frames = 0
 
         if state.state == "COOLDOWN" and state.cooldown_until is not None and now < state.cooldown_until:
@@ -225,12 +224,6 @@ class EventEngineService:
 
         if state.state == "CONFIRMED":
             state.present_frames += 1
-            if state.observed_classes != previous_classes:
-                self._update_confirmed_event(
-                    state=state,
-                    frame_id=frame_id,
-                    frame_timestamp=frame_timestamp,
-                )
 
     def _create_confirmed_event(
         self,
@@ -249,7 +242,6 @@ class EventEngineService:
                 "class_name": state.class_name or "unknown",
                 "class_id": state.class_id,
                 "track_id": state.track_id,
-                "observed_classes": sorted(state.observed_classes),
                 "confidence": float(state.latest_confidence or 0.0),
                 "state_key": state_key,
                 "first_seen_frame_id": state.first_seen_frame_id or frame_id,
@@ -290,62 +282,14 @@ class EventEngineService:
             )
 
         logger.info(
-            "Confirmed event | id=%s | class=%s | track_id=%s | classes=%s | confidence=%.2f | frame_id=%s",
+            "Confirmed event | id=%s | class=%s | track_id=%s | confidence=%.2f | frame_id=%s",
             event_id,
             state.class_name,
             state.track_id,
-            ",".join(sorted(state.observed_classes)),
             float(state.latest_confidence or 0.0),
             frame_id,
         )
         return event_id
-
-    def _update_confirmed_event(
-        self,
-        state: TrackedObjectState,
-        frame_id: int,
-        frame_timestamp: str,
-    ) -> None:
-        if state.confirmed_event_id is None:
-            return
-
-        original_frame = self.camera_service.get_latest_frame()
-        annotated_frame = self.detector_service.get_latest_annotated_frame()
-        screenshot_paths = self.screenshot_service.save_event_frames(
-            event_id=state.confirmed_event_id,
-            original_frame=original_frame,
-            annotated_frame=annotated_frame,
-            frame_timestamp=frame_timestamp,
-        )
-
-        self.repository.update_event_observed_classes(
-            event_id=state.confirmed_event_id,
-            observed_classes=sorted(state.observed_classes),
-            confidence=float(state.latest_confidence or 0.0),
-            class_name=state.class_name or "unknown",
-            class_id=state.class_id,
-            last_seen_frame_id=frame_id,
-            frame_timestamp=frame_timestamp,
-            screenshot_original_path=screenshot_paths["screenshot_original_path"],
-            screenshot_annotated_path=screenshot_paths["screenshot_annotated_path"],
-        )
-
-        row = self.repository.get_event_by_id(state.confirmed_event_id)
-        if row is not None:
-            live_event_service.publish_from_thread(
-                live_event_service.build_message(
-                    message_type="event_updated",
-                    event=serialize_event_row(row),
-                )
-            )
-
-        logger.info(
-            "Updated confirmed event | id=%s | track_id=%s | classes=%s | frame_id=%s",
-            state.confirmed_event_id,
-            state.track_id,
-            ",".join(sorted(state.observed_classes)),
-            frame_id,
-        )
 
     def _handle_absent_detection(self, state: TrackedObjectState, now: float) -> None:
         if state.state == "NOT_PRESENT":
@@ -365,6 +309,11 @@ class EventEngineService:
             return
 
         if state.state == "CONFIRMED":
+            if state.confirmed_event_id is not None and state.last_seen_frame_id is not None:
+                self.repository.update_event_last_seen(
+                    event_id=state.confirmed_event_id,
+                    last_seen_frame_id=state.last_seen_frame_id,
+                )
             state.state = "COOLDOWN"
             state.present_frames = 0
             state.absent_frames = 0
@@ -375,7 +324,6 @@ class EventEngineService:
         state.class_name = None
         state.class_id = None
         state.track_id = None
-        state.tracked = False
         state.present_frames = 0
         state.absent_frames = 0
         state.cooldown_until = None
@@ -383,46 +331,29 @@ class EventEngineService:
         state.last_seen_frame_id = None
         state.latest_confidence = None
         state.confirmed_event_id = None
-        state.observed_classes = set()
 
-    def _group_detections_by_state_key(
+    def _group_detections_by_track_id(
         self,
         detections: list[dict[str, Any]],
     ) -> dict[str, dict[str, Any]]:
         grouped: dict[str, dict[str, Any]] = {}
 
         for detection in detections:
-            state_key = self._build_state_key(detection)
-            entry = grouped.get(state_key)
-            if entry is None:
-                entry = {
-                    "class_name": detection["class_name"],
-                    "class_id": int(detection["class_id"]),
-                    "track_id": (
-                        int(detection["track_id"])
-                        if detection.get("track_id") is not None
-                        else None
-                    ),
-                    "confidence": float(detection["confidence"]),
-                    "observed_classes": {str(detection["class_name"])},
-                }
-                grouped[state_key] = entry
+            track_id = detection.get("track_id")
+            if track_id is None:
                 continue
 
-            entry["observed_classes"].add(str(detection["class_name"]))
-            if float(detection["confidence"]) > float(entry["confidence"]):
-                entry["class_name"] = detection["class_name"]
-                entry["class_id"] = int(detection["class_id"])
-                entry["confidence"] = float(detection["confidence"])
+            state_key = self._build_state_key(track_id=int(track_id))
+            entry = grouped.get(state_key)
+            if entry is None or float(detection["confidence"]) > float(entry["confidence"]):
+                grouped[state_key] = {
+                    "class_name": detection["class_name"],
+                    "class_id": int(detection["class_id"]),
+                    "track_id": int(track_id),
+                    "confidence": float(detection["confidence"]),
+                }
 
-        normalized: dict[str, dict[str, Any]] = {}
-        for state_key, entry in grouped.items():
-            normalized[state_key] = {
-                **entry,
-                "observed_classes": sorted(entry["observed_classes"]),
-            }
-
-        return normalized
+        return grouped
 
     def get_status(self) -> dict[str, Any]:
         with self._lock:
@@ -461,8 +392,5 @@ class EventEngineService:
                 "active_states": active_states,
             }
 
-    def _build_state_key(self, detection: dict[str, Any]) -> str:
-        track_id = detection.get("track_id")
-        if track_id is not None:
-            return f"track:{int(track_id)}"
-        return f"class:{str(detection['class_name'])}"
+    def _build_state_key(self, track_id: int) -> str:
+        return f"track:{track_id}"

@@ -1,23 +1,4 @@
-import json
 from typing import Any
-
-
-def parse_observed_classes(value: Any) -> list[str]:
-    if value is None:
-        return []
-
-    if isinstance(value, list):
-        return [str(item) for item in value]
-
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            return []
-        if isinstance(parsed, list):
-            return [str(item) for item in parsed]
-
-    return []
 
 
 def serialize_event_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -29,7 +10,6 @@ def serialize_event_row(row: dict[str, Any]) -> dict[str, Any]:
 
     return {
         **payload,
-        "observed_classes": parse_observed_classes(row.get("observed_classes_json")),
         "screenshot_original_url": (
             f"/api/v1/events/{event_id}/screenshots/original" if original_path else None
         ),
