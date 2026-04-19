@@ -29,6 +29,16 @@ class Settings(BaseSettings):
     vision_tracking_persist: bool = True
     vision_tracker_config: str = "bytetrack.yaml"
 
+    relay_enabled: bool = False
+    relay_publish_url: str = ""
+    relay_output_variant: str = "annotated"  # annotated | raw
+    relay_width: int = 1280
+    relay_height: int = 720
+    relay_fps: int = 30
+    relay_video_bitrate_kbps: int = 2500
+    relay_h264_preset: str = "veryfast"
+    relay_ffmpeg_bin: str = "ffmpeg"
+
     database_path: str = "data/rods.db"
     screenshots_dir: str = "data/screenshots"
     event_stable_frames: int = 8

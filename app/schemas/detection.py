@@ -37,4 +37,5 @@ class VisionStatusResponse(BaseModel):
     tracked_detections_count: int
     actual_fps: float
     last_inference_ms: float
+    live_annotations_supported: bool
     last_error: str | None

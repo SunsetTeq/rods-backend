@@ -345,6 +345,27 @@ class DetectorService:
         with self._lock:
             return self._latest_annotated_jpeg
 
+    def get_live_annotated_frame(self) -> Optional[np.ndarray]:
+        frame = self.camera_service.get_latest_frame()
+        if frame is None:
+            return self.get_latest_annotated_frame()
+        return self.compose_annotated_frame(frame)
+
+    def get_live_annotated_jpeg(self) -> Optional[bytes]:
+        frame = self.get_live_annotated_frame()
+        if frame is None:
+            return None
+
+        success, encoded = cv2.imencode(
+            ".jpg",
+            frame,
+            [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality],
+        )
+        if not success:
+            return None
+
+        return encoded.tobytes()
+
     def get_latest_detections(self) -> dict[str, Any]:
         with self._lock:
             return {
@@ -355,6 +376,67 @@ class DetectorService:
                 "detections_count": self._latest_detection_payload["detections_count"],
                 "detections": [item.copy() for item in self._latest_detection_payload["detections"]],
             }
+
+    def compose_annotated_frame(self, frame: np.ndarray) -> np.ndarray:
+        detections = self.get_latest_detections()["detections"]
+        return self._draw_detections(frame=frame, detections=detections)
+
+    def _draw_detections(
+        self,
+        frame: np.ndarray,
+        detections: list[dict[str, Any]],
+    ) -> np.ndarray:
+        annotated = frame.copy()
+
+        for detection in detections:
+            x1 = int(detection["x1"])
+            y1 = int(detection["y1"])
+            x2 = int(detection["x2"])
+            y2 = int(detection["y2"])
+            confidence = float(detection["confidence"])
+            class_name = str(detection["class_name"])
+            track_id = detection.get("track_id")
+
+            box_color = (36, 255, 12)
+            text_color = (0, 0, 0)
+            box_thickness = 2
+
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), box_color, box_thickness)
+
+            label = class_name
+            if track_id is not None:
+                label = f"{label} #{int(track_id)}"
+            label = f"{label} {confidence:.2f}"
+
+            (text_width, text_height), baseline = cv2.getTextSize(
+                label,
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                2,
+            )
+            text_top = max(0, y1 - text_height - baseline - 6)
+            text_bottom = text_top + text_height + baseline + 6
+            text_right = min(annotated.shape[1], x1 + text_width + 10)
+
+            cv2.rectangle(
+                annotated,
+                (x1, text_top),
+                (text_right, text_bottom),
+                box_color,
+                thickness=-1,
+            )
+            cv2.putText(
+                annotated,
+                label,
+                (x1 + 5, text_bottom - baseline - 3),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                text_color,
+                2,
+                cv2.LINE_AA,
+            )
+
+        return annotated
 
     def get_status(self) -> dict[str, Any]:
         return {
@@ -373,5 +455,6 @@ class DetectorService:
             "tracked_detections_count": self._tracked_detections_count,
             "actual_fps": round(self._actual_fps, 2),
             "last_inference_ms": self._last_inference_ms,
+            "live_annotations_supported": True,
             "last_error": self._last_error or self._tracking_fallback_reason,
         }

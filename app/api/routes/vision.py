@@ -25,7 +25,7 @@ def get_latest_detections() -> DetectionFrameResponse:
 
 @router.get("/frame.jpg")
 def get_annotated_frame() -> Response:
-    jpeg = detector_service.get_latest_annotated_jpeg()
+    jpeg = detector_service.get_live_annotated_jpeg()
     if jpeg is None:
         raise HTTPException(status_code=503, detail="Annotated frame is not ready yet")
 
@@ -39,7 +39,7 @@ async def annotated_mjpeg_generator(request: Request) -> AsyncIterator[bytes]:
         if await request.is_disconnected():
             break
 
-        jpeg = detector_service.get_latest_annotated_jpeg()
+        jpeg = detector_service.get_live_annotated_jpeg()
         if jpeg is None:
             await asyncio.sleep(0.05)
             continue

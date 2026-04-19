@@ -143,7 +143,7 @@ def _get_stream_frame_bytes(variant: str) -> bytes | None:
     if variant == "annotated":
         from app.services.vision.provider import detector_service
 
-        return detector_service.get_latest_annotated_jpeg()
+        return detector_service.get_live_annotated_jpeg()
 
     return camera_service.get_latest_jpeg()
 

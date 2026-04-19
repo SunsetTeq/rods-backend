@@ -35,6 +35,18 @@ class StorageSettingsResponse(BaseModel):
     stream_boundary: str
 
 
+class RelaySettingsResponse(BaseModel):
+    enabled: bool
+    publish_url: str
+    output_variant: str
+    width: int
+    height: int
+    fps: int
+    video_bitrate_kbps: int
+    h264_preset: str
+    ffmpeg_bin: str
+
+
 class RuntimeSettingsResponse(BaseModel):
     app_name: str
     app_version: str
@@ -42,3 +54,4 @@ class RuntimeSettingsResponse(BaseModel):
     vision: VisionSettingsResponse
     events: EventSettingsResponse
     storage: StorageSettingsResponse
+    relay: RelaySettingsResponse

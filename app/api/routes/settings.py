@@ -4,6 +4,7 @@ from app.core.config import settings
 from app.schemas.settings import (
     CameraSettingsResponse,
     EventSettingsResponse,
+    RelaySettingsResponse,
     RuntimeSettingsResponse,
     StorageSettingsResponse,
     VisionSettingsResponse,
@@ -47,5 +48,16 @@ def get_runtime_settings() -> RuntimeSettingsResponse:
             screenshots_dir=settings.screenshots_dir,
             frame_jpeg_quality=settings.frame_jpeg_quality,
             stream_boundary=settings.stream_boundary,
+        ),
+        relay=RelaySettingsResponse(
+            enabled=settings.relay_enabled,
+            publish_url=settings.relay_publish_url,
+            output_variant=settings.relay_output_variant,
+            width=settings.relay_width,
+            height=settings.relay_height,
+            fps=settings.relay_fps,
+            video_bitrate_kbps=settings.relay_video_bitrate_kbps,
+            h264_preset=settings.relay_h264_preset,
+            ffmpeg_bin=settings.relay_ffmpeg_bin,
         ),
     )
