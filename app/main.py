@@ -21,6 +21,7 @@ from app.services.events.provider import event_engine_service
 from app.services.live_event_provider import live_event_service
 from app.services.relay_control.provider import relay_camera_control_service
 from app.services.relay.provider import relay_publisher_service
+from app.services.relay_vision.provider import relay_vision_sync_service
 from app.services.relay_events.provider import relay_event_sync_service
 from app.services.vision.provider import detector_service
 
@@ -40,11 +41,13 @@ async def lifespan(app: FastAPI):
         )
     relay_camera_control_service.start()
     detector_service.start()
+    relay_vision_sync_service.start()
     event_engine_service.start()
     relay_publisher_service.start()
     yield
     relay_publisher_service.stop()
     event_engine_service.stop()
+    relay_vision_sync_service.stop()
     detector_service.stop()
     relay_camera_control_service.stop()
     camera_service.stop()
