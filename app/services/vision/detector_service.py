@@ -23,6 +23,10 @@ DEFAULT_LABEL_FONT_CANDIDATES = (
     "/Library/Fonts/Arial Unicode.ttf",
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
     "/System/Library/Fonts/SFNS.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansDisplay-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
 )
 
 
@@ -426,7 +430,7 @@ class DetectorService:
             x2 = int(detection["x2"])
             y2 = int(detection["y2"])
             confidence = float(detection["confidence"])
-            class_name = str(detection["class_name"])
+            class_name = self._get_display_class_name(detection)
             track_id = detection.get("track_id")
 
             box_color = (36, 255, 12)
@@ -478,10 +482,23 @@ class DetectorService:
                 return font
             except OSError:
                 logger.warning("Failed to load label font: %s", self._label_font_path)
+                self._label_font_path = None
 
         font = ImageFont.load_default()
         self._font_cache[size] = font
         return font
+
+    def _get_display_class_name(self, detection: dict[str, Any]) -> str:
+        class_name = str(detection.get("class_name") or "")
+        class_name_en = str(detection.get("class_name_en") or class_name or "object")
+
+        # If the runtime fell back to Pillow's default bitmap font, Cyrillic labels
+        # are rendered as broken glyphs on the annotated stream. In that case we keep
+        # the API payload localized, but draw the box label in English.
+        if self._label_font_path is None and not class_name.isascii():
+            return class_name_en
+
+        return class_name
 
     def get_status(self) -> dict[str, Any]:
         return {
