@@ -8,11 +8,22 @@ from typing import Any, Optional
 
 import cv2
 import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 
 from app.services.capture.camera_service import CameraService
 
 
 logger = logging.getLogger(__name__)
+CLASS_NAME_TRANSLATIONS = {
+    "knife": "нож",
+    "fork": "вилка",
+    "scissors": "ножницы",
+}
+DEFAULT_LABEL_FONT_CANDIDATES = (
+    "/Library/Fonts/Arial Unicode.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+    "/System/Library/Fonts/SFNS.ttf",
+)
 
 
 class DetectorService:
@@ -66,6 +77,8 @@ class DetectorService:
 
         self._latest_annotated_frame: Optional[np.ndarray] = None
         self._latest_annotated_jpeg: Optional[bytes] = None
+        self._font_cache: dict[int, ImageFont.FreeTypeFont | ImageFont.ImageFont] = {}
+        self._label_font_path = self._resolve_label_font_path()
         self._latest_detection_payload: dict[str, Any] = {
             "frame_id": 0,
             "source_frame_size": None,
@@ -101,6 +114,12 @@ class DetectorService:
                 return str(candidate.resolve())
 
         return normalized_path
+
+    def _resolve_label_font_path(self) -> str | None:
+        for candidate in DEFAULT_LABEL_FONT_CANDIDATES:
+            if Path(candidate).exists():
+                return candidate
+        return None
 
     def start(self) -> None:
         if not self.enabled:
@@ -199,8 +218,8 @@ class DetectorService:
             return frame.copy(), self._build_payload(frame, [])
 
         result = results[0]
-        annotated_frame = result.plot()
         detections = self._extract_detections(result)
+        annotated_frame = self._draw_detections(frame, detections)
         return annotated_frame, self._build_payload(frame, detections)
 
     def _run_model(self, frame: np.ndarray) -> list[Any]:
@@ -254,10 +273,14 @@ class DetectorService:
         for index, (coords, confidence, class_id) in enumerate(zip(xyxy, confs, classes)):
             x1, y1, x2, y2 = [int(value) for value in coords]
             class_id_int = int(class_id)
+            class_name_en = str(names.get(class_id_int, f"class_{class_id_int}"))
+            class_name_ru = self._localize_class_name(class_name_en)
             detections.append(
                 {
                     "class_id": class_id_int,
-                    "class_name": str(names.get(class_id_int, f"class_{class_id_int}")),
+                    "class_name": class_name_ru,
+                    "class_name_en": class_name_en,
+                    "class_name_ru": class_name_ru,
                     "track_id": int(track_ids[index]) if index < len(track_ids) else None,
                     "confidence": round(float(confidence), 4),
                     "x1": x1,
@@ -268,6 +291,9 @@ class DetectorService:
             )
 
         return detections
+
+    def _localize_class_name(self, class_name: str) -> str:
+        return CLASS_NAME_TRANSLATIONS.get(class_name.strip().lower(), class_name)
 
     def _build_payload(
         self,
@@ -387,6 +413,12 @@ class DetectorService:
         detections: list[dict[str, Any]],
     ) -> np.ndarray:
         annotated = frame.copy()
+        if not detections:
+            return annotated
+
+        image = Image.fromarray(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB))
+        draw = ImageDraw.Draw(image)
+        font = self._get_label_font(max(18, annotated.shape[1] // 55))
 
         for detection in detections:
             x1 = int(detection["x1"])
@@ -401,42 +433,55 @@ class DetectorService:
             text_color = (0, 0, 0)
             box_thickness = 2
 
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), box_color, box_thickness)
+            draw.rectangle(
+                [(x1, y1), (x2, y2)],
+                outline=box_color,
+                width=box_thickness,
+            )
 
             label = class_name
             if track_id is not None:
                 label = f"{label} #{int(track_id)}"
             label = f"{label} {confidence:.2f}"
 
-            (text_width, text_height), baseline = cv2.getTextSize(
-                label,
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
-                2,
-            )
-            text_top = max(0, y1 - text_height - baseline - 6)
-            text_bottom = text_top + text_height + baseline + 6
-            text_right = min(annotated.shape[1], x1 + text_width + 10)
+            text_bbox = draw.textbbox((0, 0), label, font=font)
+            text_width = text_bbox[2] - text_bbox[0]
+            text_height = text_bbox[3] - text_bbox[1]
+            text_padding_x = 8
+            text_padding_y = 4
+            text_top = max(0, y1 - text_height - (text_padding_y * 2) - 6)
+            text_bottom = text_top + text_height + (text_padding_y * 2)
+            text_right = min(image.width, x1 + text_width + (text_padding_x * 2))
 
-            cv2.rectangle(
-                annotated,
-                (x1, text_top),
-                (text_right, text_bottom),
-                box_color,
-                thickness=-1,
+            draw.rectangle(
+                [(x1, text_top), (text_right, text_bottom)],
+                fill=box_color,
             )
-            cv2.putText(
-                annotated,
+            draw.text(
+                (x1 + text_padding_x, text_top + text_padding_y - 1),
                 label,
-                (x1 + 5, text_bottom - baseline - 3),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
-                text_color,
-                2,
-                cv2.LINE_AA,
+                font=font,
+                fill=text_color,
             )
 
-        return annotated
+        return cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+
+    def _get_label_font(self, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+        cached_font = self._font_cache.get(size)
+        if cached_font is not None:
+            return cached_font
+
+        if self._label_font_path is not None:
+            try:
+                font = ImageFont.truetype(self._label_font_path, size=size)
+                self._font_cache[size] = font
+                return font
+            except OSError:
+                logger.warning("Failed to load label font: %s", self._label_font_path)
+
+        font = ImageFont.load_default()
+        self._font_cache[size] = font
+        return font
 
     def get_status(self) -> dict[str, Any]:
         return {

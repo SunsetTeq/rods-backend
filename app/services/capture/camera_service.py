@@ -1,7 +1,11 @@
 import logging
 import platform
+import re
+import shutil
+import subprocess
 import threading
 import time
+from pathlib import Path
 from typing import Optional
 
 import cv2
@@ -9,6 +13,7 @@ import numpy as np
 
 
 logger = logging.getLogger(__name__)
+STREAM_STALE_AFTER_MS = 2000
 
 _CAPTURE_BACKEND_ALIASES = {
     "any": None,
@@ -75,6 +80,17 @@ def build_video_capture(
     return cv2.VideoCapture(resolved_source), "default"
 
 
+def build_camera_id(source_type: str, source: str) -> str:
+    return f"{source_type}:{source}"
+
+
+def parse_camera_id(camera_id: str) -> tuple[str, str]:
+    source_type, separator, source = camera_id.partition(":")
+    if not separator or not source_type or not source:
+        raise ValueError("camera_id must be in format '<source_type>:<source>'")
+    return source_type, source
+
+
 class CameraService:
     def __init__(
         self,
@@ -103,6 +119,7 @@ class CameraService:
         self._latest_frame: Optional[np.ndarray] = None
         self._latest_jpeg: Optional[bytes] = None
         self._last_error: Optional[str] = None
+        self._last_frame_at: float | None = None
 
         self._frames_read = 0
         self._read_failures = 0
@@ -111,6 +128,9 @@ class CameraService:
         self._fps_counter = 0
         self._is_running = False
         self._active_backend_name = "default"
+        self._usb_camera_name_cache: dict[int, str] = {}
+        self._usb_camera_name_cache_updated_at = 0.0
+        self._cached_available_camera_sources: list[dict] = []
 
     def _reset_runtime_stats(self) -> None:
         self._frames_read = 0
@@ -118,6 +138,7 @@ class CameraService:
         self._actual_fps = 0.0
         self._last_fps_calc_time = time.time()
         self._fps_counter = 0
+        self._last_frame_at = None
 
     def start(self) -> None:
         with self._state_lock:
@@ -184,6 +205,7 @@ class CameraService:
 
         self._is_running = False
         self._active_backend_name = "default"
+        self._last_frame_at = None
         if clear_error:
             self._last_error = None
         logger.info("Camera service stopped")
@@ -225,6 +247,20 @@ class CameraService:
                 "status": self.get_status(),
             }
 
+    def refresh_available_camera_source_cache(self, max_index: int = 5) -> list[dict]:
+        cameras = self.list_available_camera_sources(
+            max_index=max_index,
+            probe_usb=True,
+        )
+        with self._state_lock:
+            self._cached_available_camera_sources = [dict(item) for item in cameras]
+            return [dict(item) for item in self._cached_available_camera_sources]
+
+    def get_cached_available_camera_sources(self) -> list[dict]:
+        with self._state_lock:
+            cached = [dict(item) for item in self._cached_available_camera_sources]
+        return self._normalize_cached_camera_sources(cached)
+
     def _reader_loop(self) -> None:
         while not self._stop_event.is_set():
             if self._capture is None:
@@ -242,6 +278,7 @@ class CameraService:
             self._frames_read += 1
             self._fps_counter += 1
             self._last_error = None
+            self._last_frame_at = time.time()
 
             now = time.time()
             elapsed = now - self._last_fps_calc_time
@@ -273,6 +310,38 @@ class CameraService:
         with self._lock:
             return self._latest_jpeg
 
+    def has_fresh_frame(self, stale_after_ms: int = STREAM_STALE_AFTER_MS) -> bool:
+        with self._state_lock:
+            if not self._is_running or self._last_frame_at is None:
+                return False
+
+            frame_age_ms = (time.time() - self._last_frame_at) * 1000
+            return frame_age_ms <= stale_after_ms
+
+    def get_stream_availability(self, stale_after_ms: int = STREAM_STALE_AFTER_MS) -> dict:
+        frame_age_ms = None
+        if self._last_frame_at is not None:
+            frame_age_ms = round((time.time() - self._last_frame_at) * 1000, 2)
+
+        status = self.get_status()
+        with self._lock:
+            has_frame = self._latest_frame is not None
+
+        return {
+            "stream_available": bool(
+                status["is_running"]
+                and has_frame
+                and frame_age_ms is not None
+                and frame_age_ms <= stale_after_ms
+            ),
+            "has_frame": has_frame,
+            "frame_age_ms": frame_age_ms,
+            "stale_after_ms": stale_after_ms,
+            "active_camera_id": build_camera_id(status["source_type"], str(status["source"])),
+            "active_camera": status,
+            "last_error": status["last_error"],
+        }
+
     def get_status(self) -> dict:
         actual_width = None
         actual_height = None
@@ -286,6 +355,7 @@ class CameraService:
             "is_running": self._is_running,
             "source_type": self.source_type,
             "source": self.source,
+            "active_camera_id": build_camera_id(self.source_type, str(self.source)),
             "frame_width": actual_width,
             "frame_height": actual_height,
             "target_fps": target_fps,
@@ -295,9 +365,10 @@ class CameraService:
             "last_error": self._last_error,
         }
 
-    def list_usb_cameras(self, max_index: int = 5) -> list[dict]:
+    def list_usb_cameras(self, max_index: int = 5, available_only: bool = True) -> list[dict]:
         cameras: list[dict] = []
         active_usb_index = None
+        usb_camera_names = self._list_usb_camera_names()
 
         if self._is_running and self.source_type == "usb":
             try:
@@ -306,36 +377,232 @@ class CameraService:
                 active_usb_index = None
 
         for index in range(max_index + 1):
+            is_available = False
+            width = None
+            height = None
+
             if active_usb_index == index:
                 status = self.get_status()
-                is_opened = True
+                latest_frame = self.get_latest_frame()
+                is_available = latest_frame is not None and self.has_fresh_frame()
                 width = status["frame_width"]
                 height = status["frame_height"]
+                if latest_frame is not None and (width is None or height is None):
+                    height, width = latest_frame.shape[:2]
             else:
                 capture, _ = build_video_capture(
                     source_type="usb",
                     source=str(index),
                     preferred_backend=self.capture_backend,
                 )
-                is_opened = capture.isOpened()
-                width = None
-                height = None
-
-                if is_opened:
+                if capture.isOpened():
                     ok, frame = capture.read()
                     if ok and frame is not None:
+                        is_available = True
                         height, width = frame.shape[:2]
 
                 capture.release()
 
+            if available_only and not is_available:
+                continue
+
+            camera_name = usb_camera_names.get(index)
             cameras.append(
                 {
                     "index": index,
-                    "available": is_opened,
+                    "available": is_available,
                     "width": width,
                     "height": height,
-                    "label": f"USB camera {index}",
+                    "label": self._build_usb_camera_label(index=index, name=camera_name),
+                    "name": camera_name,
                 }
             )
 
         return cameras
+
+    def list_available_camera_sources(
+        self,
+        max_index: int = 5,
+        probe_usb: bool = True,
+    ) -> list[dict]:
+        status = self.get_status()
+        active_source_type = status["source_type"]
+        active_source = str(status["source"])
+        cameras: list[dict] = []
+
+        if probe_usb:
+            usb_items = self.list_usb_cameras(max_index=max_index, available_only=True)
+        else:
+            usb_items = self._list_usb_cameras_without_probe(max_index=max_index)
+
+        for item in usb_items:
+            cameras.append(
+                {
+                    "camera_id": build_camera_id("usb", str(item["index"])),
+                    "source_type": "usb",
+                    "source": str(item["index"]),
+                    "label": item["label"],
+                    "name": item.get("name"),
+                    "is_active": active_source_type == "usb" and active_source == str(item["index"]),
+                    "is_available": bool(item["available"]),
+                    "frame_width": item["width"],
+                    "frame_height": item["height"],
+                }
+            )
+
+        if active_source_type in {"rtsp", "file"} and self.has_fresh_frame():
+            cameras.append(
+                {
+                    "camera_id": build_camera_id(active_source_type, active_source),
+                    "source_type": active_source_type,
+                    "source": active_source,
+                    "label": self._build_non_usb_source_label(
+                        source_type=active_source_type,
+                        source=active_source,
+                    ),
+                    "name": None,
+                    "is_active": True,
+                    "is_available": True,
+                    "frame_width": status["frame_width"],
+                    "frame_height": status["frame_height"],
+                }
+            )
+
+        cameras.sort(key=lambda item: (not item["is_active"], item["source_type"], item["source"]))
+        return cameras
+
+    def _normalize_cached_camera_sources(self, cameras: list[dict]) -> list[dict]:
+        status = self.get_status()
+        active_source_type = status["source_type"]
+        active_source = str(status["source"])
+        active_camera_id = build_camera_id(active_source_type, active_source)
+        active_is_available = bool(status["is_running"] and self.has_fresh_frame())
+
+        normalized: list[dict] = []
+        active_in_list = False
+
+        for item in cameras:
+            normalized_item = dict(item)
+            is_active = normalized_item["camera_id"] == active_camera_id
+            normalized_item["is_active"] = is_active
+
+            if is_active:
+                active_in_list = True
+                normalized_item["is_available"] = active_is_available
+                normalized_item["frame_width"] = status["frame_width"]
+                normalized_item["frame_height"] = status["frame_height"]
+
+            normalized.append(normalized_item)
+
+        if not active_in_list:
+            if active_source_type == "usb":
+                normalized.append(
+                    {
+                        "camera_id": active_camera_id,
+                        "source_type": "usb",
+                        "source": active_source,
+                        "label": self._build_usb_camera_label(index=int(active_source), name=None),
+                        "name": None,
+                        "is_active": True,
+                        "is_available": active_is_available,
+                        "frame_width": status["frame_width"],
+                        "frame_height": status["frame_height"],
+                    }
+                )
+            elif active_source_type in {"rtsp", "file"}:
+                normalized.append(
+                    {
+                        "camera_id": active_camera_id,
+                        "source_type": active_source_type,
+                        "source": active_source,
+                        "label": self._build_non_usb_source_label(
+                            source_type=active_source_type,
+                            source=active_source,
+                        ),
+                        "name": None,
+                        "is_active": True,
+                        "is_available": active_is_available,
+                        "frame_width": status["frame_width"],
+                        "frame_height": status["frame_height"],
+                    }
+                )
+
+        normalized.sort(key=lambda item: (not item["is_active"], item["source_type"], item["source"]))
+        return normalized
+
+    def _list_usb_cameras_without_probe(self, max_index: int = 5) -> list[dict]:
+        status = self.get_status()
+        active_usb_index = None
+        if status["source_type"] == "usb":
+            try:
+                active_usb_index = int(status["source"])
+            except ValueError:
+                active_usb_index = None
+
+        cameras: list[dict] = []
+        for index in range(max_index + 1):
+            is_active = active_usb_index == index
+            cameras.append(
+                {
+                    "index": index,
+                    "available": True if is_active else False,
+                    "width": status["frame_width"] if is_active else None,
+                    "height": status["frame_height"] if is_active else None,
+                    "label": self._build_usb_camera_label(index=index, name=None),
+                    "name": None,
+                }
+            )
+
+        return cameras
+
+    def _list_usb_camera_names(self) -> dict[int, str]:
+        return {}
+
+    def _list_macos_usb_camera_names(self) -> dict[int, str]:
+        ffmpeg_path = shutil.which("ffmpeg")
+        if ffmpeg_path is None:
+            return {}
+
+        try:
+            process = subprocess.run(
+                [ffmpeg_path, "-f", "avfoundation", "-list_devices", "true", "-i", ""],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            logger.debug("Failed to enumerate macOS camera names via ffmpeg", exc_info=True)
+            return {}
+
+        output = "\n".join(part for part in (process.stdout, process.stderr) if part)
+        names: dict[int, str] = {}
+        in_video_section = False
+
+        for line in output.splitlines():
+            if "AVFoundation video devices" in line:
+                in_video_section = True
+                continue
+
+            if "AVFoundation audio devices" in line:
+                break
+
+            if not in_video_section:
+                continue
+
+            match = re.search(r"\[(\d+)\]\s+(.+)$", line.strip())
+            if match is None:
+                continue
+
+            index = int(match.group(1))
+            names[index] = match.group(2).strip()
+
+        return names
+
+    def _build_usb_camera_label(self, index: int, name: str | None) -> str:
+        return f"Camera {index + 1}"
+
+    def _build_non_usb_source_label(self, source_type: str, source: str) -> str:
+        if source_type == "file":
+            return f"FILE - {Path(source).name or source}"
+        return f"{source_type.upper()} - {source}"

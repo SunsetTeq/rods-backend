@@ -5,6 +5,7 @@ class CameraStatusResponse(BaseModel):
     is_running: bool
     source_type: str
     source: str
+    active_camera_id: str | None = None
     frame_width: int | None
     frame_height: int | None
     target_fps: int | None
@@ -15,8 +16,9 @@ class CameraStatusResponse(BaseModel):
 
 
 class CameraSwitchRequest(BaseModel):
-    source_type: str
-    source: str
+    camera_id: str | None = None
+    source_type: str | None = None
+    source: str | None = None
 
 
 class CameraSwitchResponse(BaseModel):
@@ -31,12 +33,15 @@ class UsbCameraInfo(BaseModel):
     width: int | None
     height: int | None
     label: str
+    name: str | None = None
 
 
 class CameraListItemResponse(BaseModel):
+    camera_id: str
     source_type: str
     source: str
     label: str
+    name: str | None = None
     is_active: bool
     is_available: bool
     frame_width: int | None = None
@@ -45,5 +50,16 @@ class CameraListItemResponse(BaseModel):
 
 class CameraListResponse(BaseModel):
     active_camera: CameraStatusResponse
+    active_camera_id: str | None = None
     supported_source_types: list[str]
     cameras: list[CameraListItemResponse]
+
+
+class StreamAvailabilityResponse(BaseModel):
+    stream_available: bool
+    has_frame: bool
+    frame_age_ms: float | None
+    stale_after_ms: int
+    active_camera_id: str | None = None
+    active_camera: CameraStatusResponse
+    last_error: str | None

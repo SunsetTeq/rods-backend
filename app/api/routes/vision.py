@@ -5,7 +5,12 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 
 from app.core.config import settings
-from app.schemas.detection import DetectionFrameResponse, VisionStatusResponse
+from app.schemas.detection import (
+    CurrentObjectItemResponse,
+    CurrentObjectsResponse,
+    DetectionFrameResponse,
+    VisionStatusResponse,
+)
 from app.services.vision.provider import detector_service
 
 
@@ -21,6 +26,27 @@ def get_detector_status() -> VisionStatusResponse:
 def get_latest_detections() -> DetectionFrameResponse:
     payload = detector_service.get_latest_detections()
     return DetectionFrameResponse(**payload)
+
+
+@router.get("/objects/current", response_model=CurrentObjectsResponse)
+def get_current_objects() -> CurrentObjectsResponse:
+    payload = detector_service.get_latest_detections()
+    objects = [
+        CurrentObjectItemResponse(
+            id=str(item["track_id"]) if item.get("track_id") is not None else f"det-{index + 1}",
+            track_id=item.get("track_id"),
+            class_id=int(item["class_id"]),
+            class_name=str(item["class_name"]),
+            confidence=float(item["confidence"]),
+        )
+        for index, item in enumerate(payload["detections"])
+    ]
+    return CurrentObjectsResponse(
+        frame_id=int(payload["frame_id"]),
+        frame_timestamp=payload.get("frame_timestamp"),
+        objects_count=len(objects),
+        objects=objects,
+    )
 
 
 @router.get("/frame.jpg")

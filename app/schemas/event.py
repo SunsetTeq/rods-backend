@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel
 
 
@@ -19,10 +21,29 @@ class EventResponse(BaseModel):
     source_frame_height: int | None
     frame_timestamp: str
     created_at: str
+    updated_at: str | None = None
     screenshot_original_path: str | None = None
     screenshot_annotated_path: str | None = None
     screenshot_original_url: str | None = None
     screenshot_annotated_url: str | None = None
+
+
+class EventPaginationResponse(BaseModel):
+    limit: int
+    before_id: int | None = None
+    after_id: int | None = None
+    order: Literal["asc", "desc"]
+    count: int
+    has_more: bool
+    next_before_id: int | None = None
+    next_after_id: int | None = None
+    oldest_id: int | None = None
+    newest_id: int | None = None
+
+
+class EventListResponse(BaseModel):
+    items: list[EventResponse]
+    pagination: EventPaginationResponse
 
 
 class LiveEventStatusResponse(BaseModel):

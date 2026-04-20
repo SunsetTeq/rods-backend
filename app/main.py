@@ -19,7 +19,9 @@ from app.core.logging import setup_logging
 from app.services.capture.provider import camera_service
 from app.services.events.provider import event_engine_service
 from app.services.live_event_provider import live_event_service
+from app.services.relay_control.provider import relay_camera_control_service
 from app.services.relay.provider import relay_publisher_service
+from app.services.relay_events.provider import relay_event_sync_service
 from app.services.vision.provider import detector_service
 
 
@@ -29,12 +31,14 @@ setup_logging()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     live_event_service.start(asyncio.get_running_loop())
+    relay_event_sync_service.start()
     try:
         camera_service.start()
     except Exception:
         logging.getLogger(__name__).exception(
             "Camera service failed to start during application startup"
         )
+    relay_camera_control_service.start()
     detector_service.start()
     event_engine_service.start()
     relay_publisher_service.start()
@@ -42,7 +46,9 @@ async def lifespan(app: FastAPI):
     relay_publisher_service.stop()
     event_engine_service.stop()
     detector_service.stop()
+    relay_camera_control_service.stop()
     camera_service.stop()
+    relay_event_sync_service.stop()
     live_event_service.stop()
 
 

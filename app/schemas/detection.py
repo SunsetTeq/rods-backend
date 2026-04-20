@@ -4,6 +4,8 @@ from pydantic import BaseModel
 class DetectionItemResponse(BaseModel):
     class_id: int
     class_name: str
+    class_name_en: str | None = None
+    class_name_ru: str | None = None
     track_id: int | None = None
     confidence: float
     x1: int
@@ -19,6 +21,21 @@ class DetectionFrameResponse(BaseModel):
     inference_ms: float
     detections_count: int
     detections: list[DetectionItemResponse]
+
+
+class CurrentObjectItemResponse(BaseModel):
+    id: str
+    track_id: int | None = None
+    class_id: int
+    class_name: str
+    confidence: float
+
+
+class CurrentObjectsResponse(BaseModel):
+    frame_id: int
+    frame_timestamp: str | None = None
+    objects_count: int
+    objects: list[CurrentObjectItemResponse]
 
 
 class VisionStatusResponse(BaseModel):

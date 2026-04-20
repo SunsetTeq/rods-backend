@@ -1,4 +1,5 @@
 import argparse
+import shutil
 import sys
 from pathlib import Path
 
@@ -8,6 +9,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from app.core.config import settings
 from app.db.repository import EventRepository
+from app.services.storage.provider import screenshot_service
 
 
 def main() -> int:
@@ -19,10 +21,23 @@ def main() -> int:
         action="store_true",
         help="Do not reset SQLite AUTOINCREMENT for the events table.",
     )
+    parser.add_argument(
+        "--delete-screenshots",
+        action="store_true",
+        help="Delete all stored event screenshots from the screenshots directory.",
+    )
     args = parser.parse_args()
 
     repository = EventRepository(database_path=settings.database_path)
     deleted_count = repository.clear_events(reset_sequence=not args.keep_sequence)
+    deleted_screenshots = False
+
+    if args.delete_screenshots:
+        screenshots_dir = screenshot_service.base_dir
+        if screenshots_dir.exists():
+            shutil.rmtree(screenshots_dir, ignore_errors=True)
+        screenshots_dir.mkdir(parents=True, exist_ok=True)
+        deleted_screenshots = True
 
     print(f"Database: {settings.database_path}")
     print(f"Deleted events: {deleted_count}")
@@ -30,6 +45,8 @@ def main() -> int:
         print("Event ID sequence preserved.")
     else:
         print("Event ID sequence reset.")
+    if deleted_screenshots:
+        print(f"Deleted screenshots in: {screenshot_service.base_dir}")
     return 0
 
 

@@ -3,6 +3,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 from typing import Any
 
 from app.db.repository import EventRepository
@@ -14,6 +15,9 @@ from app.services.vision.detector_service import DetectorService
 
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from app.services.relay_events.sync_service import RelayEventSyncService
 
 
 @dataclass
@@ -39,6 +43,7 @@ class EventEngineService:
         detector_service: DetectorService,
         repository: EventRepository,
         screenshot_service: ScreenshotService,
+        relay_event_sync_service: "RelayEventSyncService | None",
         stable_frames: int,
         absent_frames: int,
         cooldown_seconds: int,
@@ -48,6 +53,7 @@ class EventEngineService:
         self.detector_service = detector_service
         self.repository = repository
         self.screenshot_service = screenshot_service
+        self.relay_event_sync_service = relay_event_sync_service
         self.stable_frames = stable_frames
         self.absent_frames = absent_frames
         self.cooldown_seconds = cooldown_seconds
@@ -280,6 +286,8 @@ class EventEngineService:
                     event=serialize_event_row(row),
                 )
             )
+            if self.relay_event_sync_service is not None:
+                self.relay_event_sync_service.enqueue_event(event_id)
 
         logger.info(
             "Confirmed event | id=%s | class=%s | track_id=%s | confidence=%.2f | frame_id=%s",
@@ -314,6 +322,8 @@ class EventEngineService:
                     event_id=state.confirmed_event_id,
                     last_seen_frame_id=state.last_seen_frame_id,
                 )
+                if self.relay_event_sync_service is not None:
+                    self.relay_event_sync_service.enqueue_event(state.confirmed_event_id)
             state.state = "COOLDOWN"
             state.present_frames = 0
             state.absent_frames = 0

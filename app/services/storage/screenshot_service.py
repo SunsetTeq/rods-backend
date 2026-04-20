@@ -43,8 +43,17 @@ class ScreenshotService:
         }
 
     def get_absolute_path(self, relative_path: str) -> Path:
-        resolved = (self.project_root / relative_path).resolve()
-        if self.project_root not in resolved.parents and resolved != self.project_root:
+        candidate = Path(relative_path)
+        if candidate.is_absolute():
+            resolved = candidate.resolve()
+        else:
+            resolved = (self.base_dir / candidate).resolve()
+            if not resolved.exists():
+                legacy_resolved = (self.project_root / candidate).resolve()
+                if legacy_resolved.exists():
+                    resolved = legacy_resolved
+
+        if self.base_dir not in resolved.parents and resolved != self.base_dir:
             raise ValueError("Requested screenshot path is outside of the storage directory")
         return resolved
 
@@ -76,8 +85,8 @@ class ScreenshotService:
             return None
 
         try:
-            relative_path = path.resolve().relative_to(self.project_root)
+            relative_path = path.resolve().relative_to(self.base_dir)
         except ValueError:
-            return None
+            return path.resolve().as_posix()
 
         return relative_path.as_posix()

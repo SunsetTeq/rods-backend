@@ -208,30 +208,8 @@ class EventRepository:
     def get_event_by_id(self, event_id: int) -> dict[str, Any] | None:
         with self._connect() as connection:
             row = connection.execute(
-                """
-                SELECT
-                    id,
-                    event_type,
-                    class_name,
-                    class_id,
-                    track_id,
-                    confidence,
-                    state_key,
-                    first_seen_frame_id,
-                    confirmed_frame_id,
-                    last_seen_frame_id,
-                    stable_frames_required,
-                    absent_frames_required,
-                    cooldown_seconds,
-                    source_frame_width,
-                    source_frame_height,
-                    frame_timestamp,
-                    created_at,
-                    updated_at,
-                    observed_classes_json,
-                    screenshot_original_path,
-                    screenshot_annotated_path
-                FROM events
+                f"""
+                {self._base_event_select_sql()}
                 WHERE id = ?
                 """,
                 (event_id,),
@@ -239,35 +217,68 @@ class EventRepository:
         return dict(row) if row else None
 
     def list_recent_events(self, limit: int) -> list[dict[str, Any]]:
+        rows, _ = self.list_events_page(limit=limit)
+        return rows
+
+    def list_events_page(
+        self,
+        limit: int,
+        before_id: int | None = None,
+        after_id: int | None = None,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        if before_id is not None and after_id is not None:
+            raise ValueError("before_id and after_id cannot be used together")
+
+        params: list[Any] = []
+        where_clause = ""
+        order = "DESC"
+
+        if before_id is not None:
+            where_clause = "WHERE id < ?"
+            params.append(before_id)
+        elif after_id is not None:
+            where_clause = "WHERE id > ?"
+            params.append(after_id)
+            order = "ASC"
+
         with self._connect() as connection:
             rows = connection.execute(
-                """
-                SELECT
-                    id,
-                    event_type,
-                    class_name,
-                    class_id,
-                    track_id,
-                    confidence,
-                    state_key,
-                    first_seen_frame_id,
-                    confirmed_frame_id,
-                    last_seen_frame_id,
-                    stable_frames_required,
-                    absent_frames_required,
-                    cooldown_seconds,
-                    source_frame_width,
-                    source_frame_height,
-                    frame_timestamp,
-                    created_at,
-                    updated_at,
-                    observed_classes_json,
-                    screenshot_original_path,
-                    screenshot_annotated_path
-                FROM events
-                ORDER BY id DESC
+                f"""
+                {self._base_event_select_sql()}
+                {where_clause}
+                ORDER BY id {order}
                 LIMIT ?
                 """,
-                (limit,),
+                (*params, limit + 1),
             ).fetchall()
-        return [dict(row) for row in rows]
+
+        has_more = len(rows) > limit
+        page_rows = rows[:limit]
+        return [dict(row) for row in page_rows], has_more
+
+    def _base_event_select_sql(self) -> str:
+        return """
+            SELECT
+                id,
+                event_type,
+                class_name,
+                class_id,
+                track_id,
+                confidence,
+                state_key,
+                first_seen_frame_id,
+                confirmed_frame_id,
+                last_seen_frame_id,
+                stable_frames_required,
+                absent_frames_required,
+                cooldown_seconds,
+                source_frame_width,
+                source_frame_height,
+                frame_timestamp,
+                created_at,
+                updated_at,
+                observed_classes_json,
+                screenshot_original_path,
+                screenshot_annotated_path
+            FROM events
+        """

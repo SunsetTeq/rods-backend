@@ -38,6 +38,18 @@ class Settings(BaseSettings):
     relay_video_bitrate_kbps: int = 2500
     relay_h264_preset: str = "veryfast"
     relay_ffmpeg_bin: str = "ffmpeg"
+    relay_events_enabled: bool = False
+    relay_events_api_url: str = ""
+    relay_events_token: str = ""
+    relay_source_id: str = "rods-backend"
+    relay_events_timeout_seconds: float = 10.0
+    relay_control_enabled: bool = True
+    relay_control_api_url: str = ""
+    relay_control_token: str = ""
+    relay_control_poll_interval_seconds: float = 2.0
+    relay_control_state_sync_interval_seconds: float = 5.0
+    relay_ssl_verify: bool = True
+    relay_ssl_ca_file: str = ""
 
     database_path: str = "data/rods.db"
     screenshots_dir: str = "data/screenshots"

@@ -12,8 +12,10 @@ from app.schemas.camera import (
     CameraStatusResponse,
     CameraSwitchRequest,
     CameraSwitchResponse,
+    StreamAvailabilityResponse,
     UsbCameraInfo,
 )
+from app.services.capture.camera_service import parse_camera_id
 from app.services.capture.provider import camera_service
 
 
@@ -29,20 +31,37 @@ def get_camera_status() -> CameraStatusResponse:
 @router.get("/sources/usb", response_model=list[UsbCameraInfo])
 def list_usb_sources(
     max_index: int = Query(default=settings.camera_discovery_max_index, ge=0, le=20),
+    include_unavailable: bool = Query(default=False),
 ) -> list[UsbCameraInfo]:
-    return [UsbCameraInfo(**item) for item in camera_service.list_usb_cameras(max_index)]
+    return [
+        UsbCameraInfo(**item)
+        for item in camera_service.list_usb_cameras(
+            max_index=max_index,
+            available_only=not include_unavailable,
+        )
+    ]
 
 
 @router.post("/select", response_model=CameraSwitchResponse)
 def select_camera(payload: CameraSwitchRequest) -> CameraSwitchResponse:
+    source_type, source = _resolve_camera_selection(payload)
     result = camera_service.switch_source(
-        source_type=payload.source_type,
-        source=payload.source,
+        source_type=source_type,
+        source=source,
     )
     return CameraSwitchResponse(
         ok=result["ok"],
         error=result["error"],
         status=CameraStatusResponse(**result["status"]),
+    )
+
+
+@router.get("/availability", response_model=StreamAvailabilityResponse)
+def get_stream_availability() -> StreamAvailabilityResponse:
+    payload = camera_service.get_stream_availability()
+    return StreamAvailabilityResponse(
+        **payload,
+        active_camera=CameraStatusResponse(**payload["active_camera"]),
     )
 
 
@@ -151,3 +170,19 @@ def _get_stream_frame_bytes(variant: str) -> bytes | None:
 @router.get("/view")
 def get_stream_debug_page() -> FileResponse:
     return FileResponse(DEBUG_PAGE_PATH)
+
+
+def _resolve_camera_selection(payload: CameraSwitchRequest) -> tuple[str, str]:
+    if payload.camera_id:
+        try:
+            return parse_camera_id(payload.camera_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if payload.source_type and payload.source:
+        return payload.source_type, payload.source
+
+    raise HTTPException(
+        status_code=422,
+        detail="Provide either camera_id or both source_type and source",
+    )
