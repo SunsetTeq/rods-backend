@@ -19,6 +19,16 @@ class VisionSettingsResponse(BaseModel):
     max_detections: int
     inference_fps: int
     log_interval_seconds: int
+    focus_enabled: bool
+    focus_motion_threshold: int
+    focus_min_motion_area: int
+    focus_padding: int
+    focus_hold_frames: int
+    focus_merge_gap: int
+    focus_max_rois: int
+    focus_full_frame_area_threshold: float
+    focus_full_frame_refresh_interval: int
+    focus_tracking_iou_threshold: float
 
 
 class EventSettingsResponse(BaseModel):

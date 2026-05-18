@@ -28,6 +28,16 @@ class Settings(BaseSettings):
     vision_tracking_enabled: bool = True
     vision_tracking_persist: bool = True
     vision_tracker_config: str = "bytetrack.yaml"
+    vision_focus_enabled: bool = True
+    vision_focus_motion_threshold: int = 25
+    vision_focus_min_motion_area: int = 1200
+    vision_focus_padding: int = 64
+    vision_focus_hold_frames: int = 4
+    vision_focus_merge_gap: int = 32
+    vision_focus_max_rois: int = 3
+    vision_focus_full_frame_area_threshold: float = 0.45
+    vision_focus_full_frame_refresh_interval: int = 20
+    vision_focus_tracking_iou_threshold: float = 0.2
 
     relay_enabled: bool = False
     relay_publish_url: str = ""
